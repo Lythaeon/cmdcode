@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+"""CLI entry point for command-code-proxy."""
+from command_code_proxy.proxy import main
+
+if __name__ == "__main__":
+    main()
