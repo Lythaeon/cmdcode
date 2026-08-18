@@ -1,0 +1,27 @@
+# Command Code OpenAI-compatible translation proxy — user unit.
+# Translates OpenAI /v1/chat/completions <-> Command Code /alpha/generate.
+# Reads ~/.commandcode/auth.json per request.
+#
+# Install:
+#   cp systemd/command-code-proxy.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now command-code-proxy
+#   journalctl --user -u command-code-proxy -f
+#
+# Overrides:
+#   COMMAND_CODE_API_BASE   (default https://api.commandcode.ai)
+#   COMMAND_CODE_PROXY_PORT (default 18080)
+#   COMMAND_CODE_PROXY_HOST (default 127.0.0.1)
+[Unit]
+Description=Command Code OpenAI-compatible translation proxy
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env python3 -m command_code_proxy.proxy
+Restart=on-failure
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
