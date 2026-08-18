@@ -12,7 +12,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def patch_auth_and_config(tmp_path):
-    """Auto-patch auth and config for all tests so no real ~/.commandcode is read."""
+    """Auto-patch auth and config for all tests."""
     auth_dir = tmp_path / ".commandcode"
     auth_dir.mkdir()
     (auth_dir / "auth.json").write_text(json.dumps({
@@ -49,6 +49,7 @@ class MockUpstreamHandler(http.server.BaseHTTPRequestHandler):
             "path": self.path,
             "headers": dict(self.headers),
             "body": body,
+            "timestamp": time.time(),
         })
 
         if self.response_status != 200:

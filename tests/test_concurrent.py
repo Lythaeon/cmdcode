@@ -177,3 +177,78 @@ class TestConcurrentRequests:
 
         assert all(results), "Some requests did not get tool calls"
         assert len(results) == 5
+
+    def test_concurrent_mixed_stream_and_nonstream(self, proxy_server, mock_upstream):
+        """Mix of streaming and non-streaming concurrent requests."""
+        _, _, handler = mock_upstream
+        handler.response_events = [
+            {"type": "text-delta", "text": "ok"},
+            {"type": "finish", "finishReason": "stop",
+             "totalUsage": {"inputTokens": 1, "outputTokens": 1,
+                            "inputTokenDetails": {}}},
+        ]
+        host, port = proxy_server
+        results = []
+
+        def make_request(idx, stream):
+            conn = http.client.HTTPConnection(host, port, timeout=10)
+            body = json.dumps({
+                "model": "gpt-5.6-luna",
+                "messages": [{"role": "user", "content": f"req-{idx}"}],
+                "stream": stream,
+            })
+            conn.request("POST", "/v1/chat/completions", body,
+                         {"Content-Type": "application/json"})
+            resp = conn.getresponse()
+            raw = resp.read().decode()
+            results.append((idx, stream, resp.status))
+
+        threads = []
+        for i in range(5):
+            t = threading.Thread(target=make_request, args=(i, i % 2 == 0))
+            threads.append(t)
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+
+        assert len(results) == 5
+        for idx, stream, status in results:
+            assert status == 200
+
+    def test_concurrent_requests_different_models(self, proxy_server, mock_upstream):
+        """Concurrent requests using different model IDs."""
+        _, _, handler = mock_upstream
+        handler.response_events = [
+            {"type": "text-delta", "text": "ok"},
+            {"type": "finish", "finishReason": "stop",
+             "totalUsage": {"inputTokens": 1, "outputTokens": 1,
+                            "inputTokenDetails": {}}},
+        ]
+        host, port = proxy_server
+        models = ["gpt-5.6-luna", "gpt-5.6-sol", "claude-sonnet-5", "deepseek/deepseek-v4-pro"]
+        results = []
+
+        def make_request(idx, model):
+            conn = http.client.HTTPConnection(host, port, timeout=10)
+            body = json.dumps({
+                "model": model,
+                "messages": [{"role": "user", "content": f"req-{idx}"}],
+                "stream": False,
+            })
+            conn.request("POST", "/v1/chat/completions", body,
+                         {"Content-Type": "application/json"})
+            resp = conn.getresponse()
+            data = json.loads(resp.read())
+            results.append((idx, model, data.get("model")))
+
+        threads = [threading.Thread(target=make_request, args=(i, m))
+                   for i, m in enumerate(models)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+
+        assert len(results) == 4
+        for idx, model, returned_model in results:
+            assert returned_model == model

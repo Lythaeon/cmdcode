@@ -6,17 +6,21 @@ any OpenAI-compatible client (OpenCode, LiteLLM, curl, etc.) can use a
 Command Code subscription as a native model provider.
 
 Endpoints:
-  GET  /v1/models             -> model list
+  GET  /v1/models             -> model list (all Command Code models)
   GET  /health                -> health check
   POST /v1/chat/completions   -> non-stream (JSON) or stream (SSE)
 
 Env:
-  COMMAND_CODE_PROXY_PORT     listen port (default 18080)
-  COMMAND_CODE_API_BASE       upstream base (default https://api.commandcode.ai)
-  COMMAND_CODE_PROXY_HOST     bind address (default 127.0.0.1)
-  COMMAND_CODE_PROXY_CORS     CORS origin (default unset = no CORS headers)
-  COMMAND_CODE_PROXY_TIMEOUT  upstream timeout in seconds (default 600)
-  COMMAND_CODE_PROXY_RETRIES  retry count for transient failures (default 2)
+  COMMAND_CODE_PROXY_PORT        listen port (default 18080)
+  COMMAND_CODE_API_BASE          upstream base (default https://api.commandcode.ai)
+  COMMAND_CODE_PROXY_HOST        bind address (default 127.0.0.1)
+  COMMAND_CODE_PROXY_CORS        CORS origin (default unset = no CORS headers)
+  COMMAND_CODE_PROXY_TIMEOUT     upstream timeout in seconds (default 600)
+  COMMAND_CODE_PROXY_RETRIES     retry count for transient failures (default 2)
+  COMMAND_CODE_PROXY_MAX_REQS    max concurrent requests (default 0 = unlimited)
+  COMMAND_CODE_PROXY_MODELS      comma-separated allowlist of model IDs (default: all)
+  COMMAND_CODE_PROXY_DEFAULT     default model ID (default: gpt-5.6-luna)
+  COMMAND_CODE_PROXY_LOG_LEVEL   logging level (default: INFO)
 """
 
 import errno
@@ -25,21 +29,25 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
 import uuid
 from typing import Any, Generator, Optional, Union
 
 import http.client
 import http.server
-import threading
 
 from .wire_format import (
     API_BASE,
+    DEFAULT_MODEL,
+    REASONING_EFFORTS,
     build_auth_headers,
     ensure_cli_updated_background,
     get_cli_version,
     get_git_info,
+    get_model_catalog,
     load_config,
+    parse_model_and_effort,
     wire_messages,
     wire_tools,
 )
@@ -50,10 +58,21 @@ CORS_ORIGIN = os.environ.get("COMMAND_CODE_PROXY_CORS", "")
 UPSTREAM_TIMEOUT = int(os.environ.get("COMMAND_CODE_PROXY_TIMEOUT", "600"))
 MAX_RETRIES = int(os.environ.get("COMMAND_CODE_PROXY_RETRIES", "2"))
 RETRY_BACKOFF = [0.5, 1.5]  # seconds between retries
-
-KNOWN_MODELS = ["gpt-5.6-luna", "xiaomi/mimo-v2.5-pro"]
+MAX_CONCURRENT = int(os.environ.get("COMMAND_CODE_PROXY_MAX_REQS", "0"))
+PROXY_DEFAULT_MODEL = os.environ.get("COMMAND_CODE_PROXY_DEFAULT", DEFAULT_MODEL)
 
 log = logging.getLogger("command-code-proxy")
+
+# Model allowlist: None = all models allowed, set = only these models
+_allowed_models: Optional[set[str]] = None
+_allowed_models_raw = os.environ.get("COMMAND_CODE_PROXY_MODELS", "")
+if _allowed_models_raw.strip():
+    _allowed_models = {m.strip() for m in _allowed_models_raw.split(",") if m.strip()}
+
+# Concurrency semaphore: 0 = unlimited
+_semaphore: Optional[threading.Semaphore] = None
+if MAX_CONCURRENT > 0:
+    _semaphore = threading.Semaphore(MAX_CONCURRENT)
 
 # Suppress noisy tracebacks for benign client disconnects
 _ERRNOS_SUPPRESSED = {errno.ECONNRESET, errno.EPIPE, errno.ECONNABORTED}
@@ -61,7 +80,13 @@ _ERRNOS_SUPPRESSED = {errno.ECONNRESET, errno.EPIPE, errno.ECONNABORTED}
 
 def _default_model() -> str:
     cfg = load_config()
-    return cfg.get("model", "gpt-5.6-luna")
+    return cfg.get("model", PROXY_DEFAULT_MODEL)
+
+
+def _is_model_allowed(model_id: str) -> bool:
+    if _allowed_models is None:
+        return True
+    return model_id in _allowed_models
 
 
 # --- Upstream call ---------------------------------------------------------
@@ -91,6 +116,7 @@ def _parse_api_base(base: str):
 
 def _upstream_stream(model: str, messages: list, tools: list, system,
                      max_tokens: int, temperature, cwd: str,
+                     reasoning_effort: Optional[str] = None,
                      timeout: Optional[int] = None) -> http.client.HTTPResponse:
     """POST the CLI-exact wire body to /alpha/generate and return the open
     HTTPResponse (streaming NDJSON)."""
@@ -113,6 +139,8 @@ def _upstream_stream(model: str, messages: list, tools: list, system,
         body["params"]["system"] = system
     if temperature is not None:
         body["params"]["temperature"] = temperature
+    if reasoning_effort:
+        body["params"]["reasoning_effort"] = reasoning_effort
 
     headers = build_auth_headers(cwd)
     scheme, host, port = _parse_api_base(API_BASE)
@@ -283,8 +311,23 @@ def _is_retryable(status: int) -> bool:
 
 
 def _handle_chat(body: dict, request_timeout: Optional[int] = None) -> Union[list, Generator[str, None, None]]:
-    model = body.get("model") or _default_model()
-    model = model.split("/", 1)[1] if model.startswith("command-code/") else model
+    raw_model = body.get("model") or _default_model()
+
+    # Parse model:effort syntax (e.g. "claude-sonnet-5:high")
+    model, effort_from_model = parse_model_and_effort(raw_model)
+
+    # reasoning_effort: explicit body param takes precedence, then model:effort
+    reasoning_effort = body.get("reasoning_effort") or effort_from_model
+    if reasoning_effort and reasoning_effort not in REASONING_EFFORTS:
+        reasoning_effort = None
+
+    if not _is_model_allowed(model):
+        raise UpstreamError(400, {
+            "message": f"Model '{model}' is not in the allowed models list. "
+                       f"Available: {', '.join(sorted(_allowed_models or set()))}",
+            "type": "invalid_model",
+        })
+
     raw_messages = body.get("messages") or []
     system = None
     filtered: list = []
@@ -313,7 +356,8 @@ def _handle_chat(body: dict, request_timeout: Optional[int] = None) -> Union[lis
     for attempt in range(1 + MAX_RETRIES):
         try:
             resp = _upstream_stream(model, messages, tools, system, max_tokens,
-                                    temperature, cwd, timeout=request_timeout)
+                                    temperature, cwd, reasoning_effort=reasoning_effort,
+                                    timeout=request_timeout)
 
             if resp.status != 200:
                 err_raw = resp.read().decode("utf-8", errors="replace")
@@ -352,7 +396,6 @@ def _handle_chat(body: dict, request_timeout: Optional[int] = None) -> Union[lis
             raise UpstreamError(502, {"message": f"Proxy error: {e}",
                                       "type": "command_code_proxy_error"}) from e
 
-    # Should not reach here, but safety net
     raise UpstreamError(502, {"message": "Max retries exceeded",
                               "type": "command_code_max_retries"})
 
@@ -455,11 +498,22 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         path = self.path.rstrip("/")
         if path in ("/v1/models", "/models"):
             default = _default_model()
-            ids = [default] + [m for m in KNOWN_MODELS if m != default]
+            catalog = get_model_catalog()
+            models_data = []
+            for mid, meta in catalog.items():
+                models_data.append({
+                    "id": mid,
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": meta.get("provider", "command-code"),
+                    "name": meta.get("name", mid),
+                    "reasoning": meta.get("reasoning", False),
+                    "efforts": meta.get("efforts", []),
+                    "context_window": meta.get("context_window", 0),
+                })
             self._send_json(200, {
                 "object": "list",
-                "data": [{"id": mid, "object": "model", "owned_by": "command-code"}
-                         for mid in ids],
+                "data": models_data,
             })
             return
         if path == "/health":
@@ -467,7 +521,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 "status": "ok",
                 "version": get_cli_version(),
                 "upstream": API_BASE,
-                "models": KNOWN_MODELS,
+                "models": len(get_model_catalog()),
+                "default_model": PROXY_DEFAULT_MODEL,
             })
             return
         self._send_json(404, {"error": {"message": f"Unknown route {self.path}",
@@ -481,9 +536,22 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return
         request_id = uuid.uuid4().hex[:12]
         t0 = time.monotonic()
+
+        # Concurrency limiting
+        if _semaphore is not None:
+            if not _semaphore.acquire(blocking=False):
+                log.warning("[%s] concurrency limit reached (%d)", request_id, MAX_CONCURRENT)
+                self._send_json(429, {"error": {
+                    "message": f"Concurrency limit reached ({MAX_CONCURRENT} max)",
+                    "type": "rate_limit_error",
+                }})
+                return
+
         try:
             body = self._read_body()
         except UpstreamError as e:
+            if _semaphore is not None:
+                _semaphore.release()
             self._send_json(e.status, {"error": e.error})
             return
 
@@ -497,11 +565,15 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             elapsed = time.monotonic() - t0
             log.error("[%s] upstream error %d in %.2fs: %s",
                       request_id, e.status, elapsed, e.error.get("message", ""))
+            if _semaphore is not None:
+                _semaphore.release()
             self._send_json(e.status, {"error": e.error})
             return
         except Exception as e:
             elapsed = time.monotonic() - t0
             log.error("[%s] proxy error in %.2fs: %s", request_id, elapsed, e)
+            if _semaphore is not None:
+                _semaphore.release()
             self._send_json(502, {"error": {"message": f"Proxy error: {e}",
                                             "type": "command_code_proxy_error"}})
             return
@@ -509,10 +581,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if isinstance(result, list):
             elapsed = time.monotonic() - t0
             log.info("[%s] completed in %.2fs (non-stream)", request_id, elapsed)
+            if _semaphore is not None:
+                _semaphore.release()
             self._send_json(200, result[0])
             return
 
-        # Streaming response
+        # Streaming response — semaphore released after stream ends
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -527,6 +601,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 chunks_sent += 1
         except (OSError, GeneratorExit):
             pass
+        finally:
+            if _semaphore is not None:
+                _semaphore.release()
         elapsed = time.monotonic() - t0
         log.info("[%s] completed in %.2fs (stream, %d chunks)", request_id, elapsed, chunks_sent)
 
@@ -542,21 +619,28 @@ def _setup_signals(server):
 
 
 def main():
+    log_level = os.environ.get("COMMAND_CODE_PROXY_LOG_LEVEL", "INFO").upper()
     logging.basicConfig(
-        level=logging.INFO,
+        level=getattr(logging, log_level, logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         stream=sys.stderr,
     )
 
-    # Kick off CLI update check in background (non-blocking)
     ensure_cli_updated_background()
 
     server = http.server.ThreadingHTTPServer((HOST, PORT), ProxyHandler)
     server.daemon_threads = True
     _setup_signals(server)
 
-    log.info("listening on http://%s:%s (upstream: %s, timeout: %ds, retries: %d)",
-             HOST, PORT, API_BASE, UPSTREAM_TIMEOUT, MAX_RETRIES)
+    log.info("listening on http://%s:%s (upstream: %s, timeout: %ds, retries: %d, models: %d)",
+             HOST, PORT, API_BASE, UPSTREAM_TIMEOUT, MAX_RETRIES, len(get_model_catalog()))
+    if _allowed_models:
+        log.info("model allowlist: %s", ", ".join(sorted(_allowed_models)))
+    if MAX_CONCURRENT > 0:
+        log.info("concurrency limit: %d", MAX_CONCURRENT)
+    if CORS_ORIGIN:
+        log.info("CORS origin: %s", CORS_ORIGIN)
+
     try:
         server.serve_forever()
     except KeyboardInterrupt:

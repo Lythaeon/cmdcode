@@ -6,6 +6,8 @@ Single source of truth for:
   - Git/project context building (cached with short TTL)
   - OpenAI <-> Command Code message/tool translation
   - CLI version detection and self-update (background, non-blocking)
+  - Model catalog (auto-parsed from CLI's bundled models.md)
+  - Reasoning effort support (low/medium/high/xhigh/max)
 """
 
 import json
@@ -31,6 +33,172 @@ elif os.environ.get("COMMAND_CODE_LOCAL") == "1":
     API_BASE = "http://localhost:9090"
 else:
     API_BASE = "https://api.commandcode.ai"
+
+# Reasoning effort levels supported by the API
+REASONING_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
+
+DEFAULT_MODEL = "gpt-5.6-luna"
+
+# --- Model catalog (auto-parsed from CLI bundled models.md) ----------------
+
+_MODEL_CATALOG_CACHE: Optional[dict[str, dict[str, Any]]] = None
+_MODEL_CATALOG_LOCK = threading.Lock()
+
+
+def _find_models_md() -> Optional[Path]:
+    """Find the CLI's bundled models.md file."""
+    # Try the global npm install location
+    try:
+        result = subprocess.run(
+            ["node", "-e",
+             "console.log(require.resolve('command-code/package.json'))"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            pkg_json = Path(result.stdout.strip())
+            # Walk up to find dist/bundled
+            candidate = (pkg_json.parent / "dist" / "bundled" /
+                         "command-code-knowledge" / "reference" / "models.md")
+            if candidate.exists():
+                return candidate
+    except Exception:
+        pass
+    # Try common locations
+    for base in [
+        Path.home() / ".linuxbrew" / "lib" / "node_modules",
+        Path("/home/linuxbrew/.linuxbrew/lib/node_modules"),
+        Path("/usr/local/lib/node_modules"),
+        Path("/usr/lib/node_modules"),
+    ]:
+        candidate = (base / "command-code" / "dist" / "bundled" /
+                     "command-code-knowledge" / "reference" / "models.md")
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _parse_models_md(content: str) -> dict[str, dict[str, Any]]:
+    """Parse the CLI's models.md table into a model catalog dict."""
+    catalog: dict[str, dict[str, Any]] = {}
+    current_provider = "unknown"
+
+    for line in content.split("\n"):
+        line = line.strip()
+
+        # Detect provider section headers (## Open Source, ## Anthropic, etc.)
+        if line.startswith("## "):
+            current_provider = line[3:].strip().lower()
+            # Normalize provider names
+            provider_map = {
+                "open source": "open-source",
+                "openai": "openai",
+                "anthropic": "anthropic",
+                "google": "google",
+                "sakana": "sakana",
+                "meta": "meta",
+                "xiai": "xai",
+            }
+            current_provider = provider_map.get(current_provider, current_provider)
+            continue
+
+        # Parse table rows: | `id` | Name | Context | Efforts | Pricing | Min plan | Best for |
+        if not line.startswith("|") or line.startswith("|---") or line.startswith("| Id"):
+            continue
+
+        cols = [c.strip() for c in line.split("|")]
+        cols = [c for c in cols if c]  # remove empty from leading/trailing |
+
+        if len(cols) < 5:
+            continue
+
+        # Extract model ID (backtick-wrapped)
+        id_match = re.search(r"`([^`]+)`", cols[0])
+        if not id_match:
+            continue
+        model_id = id_match.group(1)
+
+        name = cols[1] if len(cols) > 1 else model_id
+        context = cols[2] if len(cols) > 2 else ""
+        efforts_str = cols[3] if len(cols) > 3 else ""
+
+        # Parse efforts
+        efforts = []
+        if efforts_str and efforts_str != "—":
+            efforts = [e.strip() for e in efforts_str.split(",") if e.strip()]
+
+        # Parse context window
+        context_window = 0
+        if context and context != "—":
+            ctx_match = re.search(r"([\d.]+)\s*([KkMm])?", context)
+            if ctx_match:
+                val = float(ctx_match.group(1))
+                unit = (ctx_match.group(2) or "").upper()
+                if unit == "M":
+                    context_window = int(val * 1_000_000)
+                elif unit == "K":
+                    context_window = int(val * 1_000)
+                else:
+                    context_window = int(val)
+
+        catalog[model_id] = {
+            "name": name,
+            "reasoning": len(efforts) > 0,
+            "efforts": efforts,
+            "context_window": context_window,
+            "provider": current_provider,
+        }
+
+    return catalog
+
+
+def get_model_catalog() -> dict[str, dict[str, Any]]:
+    """Get the model catalog. Parsed from CLI's models.md, cached after first call."""
+    global _MODEL_CATALOG_CACHE
+    if _MODEL_CATALOG_CACHE is not None:
+        return _MODEL_CATALOG_CACHE
+    with _MODEL_CATALOG_LOCK:
+        if _MODEL_CATALOG_CACHE is not None:
+            return _MODEL_CATALOG_CACHE
+        models_md = _find_models_md()
+        if models_md:
+            try:
+                content = models_md.read_text()
+                _MODEL_CATALOG_CACHE = _parse_models_md(content)
+                print(f"[command-code-proxy] loaded {len(_MODEL_CATALOG_CACHE)} models "
+                      f"from {models_md}", file=sys.stderr, flush=True)
+                return _MODEL_CATALOG_CACHE
+            except Exception as e:
+                print(f"[command-code-proxy] failed to parse models.md: {e}",
+                      file=sys.stderr, flush=True)
+        # Fallback: empty catalog (proxy still works, just /v1/models is empty)
+        _MODEL_CATALOG_CACHE = {}
+        return _MODEL_CATALOG_CACHE
+
+
+def parse_model_and_effort(model_str: str) -> tuple[str, Optional[str]]:
+    """Parse 'model_id:effort' into (model_id, effort).
+
+    Examples:
+        "gpt-5.6-luna" -> ("gpt-5.6-luna", None)
+        "claude-sonnet-5:high" -> ("claude-sonnet-5", "high")
+        "command-code/gpt-5.6-luna:max" -> ("gpt-5.6-luna", "max")
+    """
+    # Strip command-code/ prefix
+    if model_str.startswith("command-code/"):
+        model_str = model_str[len("command-code/"):]
+
+    # Split on : for effort
+    if ":" in model_str:
+        parts = model_str.rsplit(":", 1)
+        model_id = parts[0]
+        effort = parts[1].lower()
+        if effort not in REASONING_EFFORTS:
+            # Not a valid effort — treat the whole thing as model ID
+            return model_str, None
+        return model_id, effort
+
+    return model_str, None
+
 
 # --- Auth / config helpers ------------------------------------------------
 
@@ -199,7 +367,7 @@ def _do_cli_update() -> None:
         )
         if result.returncode == 0:
             global _cli_version_cache
-            _cli_version_cache = None  # invalidate cache
+            _cli_version_cache = None
             print(f"[command-code-proxy] updated to {get_cli_version()}",
                   file=sys.stderr, flush=True)
         else:
