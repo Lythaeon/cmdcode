@@ -119,17 +119,22 @@ impl ProxyHttp for CommandCodeProxy {
             }
         }
 
-        // Read and parse body with size limit
-        let body_bytes = session.read_request_body().await?.unwrap_or_default();
-        if body_bytes.len() > self.config.max_body_size {
-            let err = serde_json::json!({
-                "error": {
-                    "message": format!("Request body too large: {} bytes (max {})", body_bytes.len(), self.config.max_body_size),
-                    "type": "invalid_request_error"
-                }
-            });
-            self.send_json(session, 413, &err).await?;
-            return Ok(true);
+        // Read and parse body with size limit.
+        // read_request_body() returns at most one 64KB chunk per call —
+        // loop until None to collect the full body.
+        let mut body_bytes = Vec::new();
+        while let Some(chunk) = session.read_request_body().await? {
+            body_bytes.extend_from_slice(&chunk);
+            if body_bytes.len() > self.config.max_body_size {
+                let err = serde_json::json!({
+                    "error": {
+                        "message": format!("Request body too large: {} bytes (max {})", body_bytes.len(), self.config.max_body_size),
+                        "type": "invalid_request_error"
+                    }
+                });
+                self.send_json(session, 413, &err).await?;
+                return Ok(true);
+            }
         }
 
         let body: ChatCompletionRequest = match serde_json::from_slice(&body_bytes) {
