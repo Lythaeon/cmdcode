@@ -1827,6 +1827,7 @@ dependencies = [
  "pingora-http",
  "pingora-proxy",
  "proxy-core",
+ "rand 0.8.7",
  "reqwest",
  "serde",
  "serde_json",

@@ -706,4 +706,76 @@ mod tests {
             let _ = translate_line(line, &mut s);
         }
     }
+
+    /// Randomized soak test over `translate_line`. Ignored by default; run with
+    /// `cargo test -p proxy-server -- --ignored fuzz` (or set FUZZ_SECONDS to
+    /// bound the run, default 300s). Asserts translate_line never panics and
+    /// that every emitted payload is valid SSE carrying a JSON chunk.
+    #[test]
+    #[ignore = "long-running randomized soak test"]
+    fn test_translate_fuzz_soak() {
+        use rand::Rng;
+
+        let seconds: u64 = std::env::var("FUZZ_SECONDS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(300);
+
+        let fragments = [
+            "", " ", "\n", "\u{0}", "{\"type\":", "\"text-delta\"", "\"tool-call\"",
+            "\"finish\"", "\"error\"", "\"reasoning-delta\"", "\"toolCallId\":\"tc\"",
+            "\"toolName\":\"t\"", "\"input\":", "\"text\":\"hi\"", "null", "42",
+            "[1,2,3]", "\"totalUsage\":{\"inputTokens\":1,\"outputTokens\":2}",
+            "{\"type\":\"finish\",\"finishReason\":\"stop\"}",
+            "{\"type\":\"tool-call\",\"input\":{\"a\":[1,{\"b\":null}]}}",
+            "{\"type\":\"tool-call\",\"input\":\"{\\\"a\\\":1}\"}",
+            "\"reasoning_effort\":\"high\"", "}",
+        ];
+
+        let mut rng = rand::thread_rng();
+        let mut emitted = 0usize;
+        let mut parsed_ok = 0usize;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+        let mut iterations = 0u64;
+
+        while std::time::Instant::now() < deadline {
+            iterations += 1;
+            let mut line = String::new();
+            let n_frags = rng.gen_range(1..=8);
+            for _ in 0..n_frags {
+                line.push_str(fragments[rng.gen_range(0..fragments.len())]);
+            }
+            let mut s = StreamState {
+                completion_id: "chatcmpl-fuzz",
+                created: 12345,
+                model: "m",
+                tool_index: 0,
+            };
+            match translate_line(&line, &mut s) {
+                LineOutcome::Skip => {}
+                LineOutcome::Emit(p) | LineOutcome::EmitAndStop(p) => {
+                    emitted += 1;
+                    assert!(p.starts_with("data: "), "SSE payload must start with data: {p}");
+                    let json = p.trim_start_matches("data: ").trim();
+                    assert!(serde_json::from_str::<serde_json::Value>(json).is_ok(),
+                        "emitted payload must be valid JSON: {p}");
+                    parsed_ok += 1;
+                    let v: serde_json::Value = serde_json::from_str(json).unwrap();
+                    if let Some(choices) = v.get("choices") {
+                        if let Some(chunk) = choices.as_array().and_then(|a| a.first()) {
+                            if let Some(tc) = chunk["delta"]["tool_calls"].as_array().and_then(|a| a.first()) {
+                                let args = &tc["function"]["arguments"];
+                                assert!(args.is_string(), "tool-call arguments must be a string: {args}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        eprintln!(
+            "[fuzz] {iterations} iterations, {emitted} emitted, {parsed_ok} parseable in {seconds}s"
+        );
+        assert!(iterations > 0);
+    }
 }
