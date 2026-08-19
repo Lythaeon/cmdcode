@@ -1,7 +1,7 @@
 # command-code-openapi-proxy
 
 OpenAI-compatible proxy in front of Command Code's HTTP API. Use your
-Command Code subscription with **any** OpenAI-compatible toolchain —
+Command Code subscription with **any** OpenAI-compatible toolchain -
 no vendor lock-in.
 
 ## What it does
@@ -41,17 +41,17 @@ curl http://127.0.0.1:18080/v1/chat/completions \
 
 ## Features
 
-- **OpenAI-compatible** — `/v1/chat/completions` (stream + non-stream)
-- **Streaming** — full SSE translation (text, reasoning, tool calls)
-- **Tool calls** — OpenAI function calling ↔ Command Code tool-call format
-- **Rust + Pingora** — production-grade, sub-millisecond overhead
-- **CLI fingerprint** — sends the exact headers/body the `cmd` CLI sends
-- **Auto-discovery** — model catalog parsed from CLI's bundled `models.md`
-- **Reasoning effort** — `low`/`medium`/`high`/`xhigh`/`max` support
-- **Retry logic** — automatic retry on transient upstream failures (502/503/504)
-- **Health check** — `GET /health` for monitoring
-- **CORS** — optional CORS headers for browser clients
-- **Concurrency** — Pingora handles multiple simultaneous agents
+- **OpenAI-compatible** - `/v1/chat/completions` (stream + non-stream)
+- **Streaming** - full SSE translation (text, reasoning, tool calls)
+- **Tool calls** - OpenAI function calling ↔ Command Code tool-call format
+- **Rust + Pingora** - production-grade, sub-millisecond overhead
+- **CLI fingerprint** - sends the exact headers/body the `cmd` CLI sends
+- **Auto-discovery** - model catalog parsed from CLI's bundled `models.md`
+- **Reasoning effort** - `low`/`medium`/`high`/`xhigh`/`max` support
+- **Retry logic** - automatic retry on transient upstream failures (502/503/504)
+- **Health check** - `GET /health` for monitoring
+- **CORS** - optional CORS headers for browser clients
+- **Concurrency** - Pingora handles multiple simultaneous agents
 
 ## Wire it into OpenCode
 
@@ -127,9 +127,9 @@ model_list:
 
 ## Documentation
 
-- [Architecture](docs/architecture.md) — wire format translation details
-- [Setup guide](docs/setup.md) — installation, Docker, nginx
-- [OpenCode integration](docs/opencode-integration.md) — step-by-step wiring
+- [Architecture](docs/architecture.md) - wire format translation details
+- [Setup guide](docs/setup.md) - installation, Docker, nginx
+- [OpenCode integration](docs/opencode-integration.md) - step-by-step wiring
 
 ## License
 

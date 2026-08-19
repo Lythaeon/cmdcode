@@ -49,7 +49,7 @@ Add a custom provider in your `opencode.json`:
 **Key fields:**
 - `npm`: Must be `@ai-sdk/openai-compatible` (OpenCode's OpenAI-compatible provider)
 - `options.baseURL`: Points to the proxy at `http://localhost:18080/v1`
-  (the `/v1` suffix is required — OpenCode appends `/chat/completions`)
+  (the `/v1` suffix is required - OpenCode appends `/chat/completions`)
 - `models`: Each key is a model ID that the proxy accepts
 
 ## Step 3: Restart OpenCode
@@ -182,9 +182,9 @@ console.log(response.choices[0].message.content);
 
 The official `cmd` CLI is a monolithic Node.js harness. The proxy gives you:
 
-1. **Composability** — plug into any OpenAI-compatible pipeline
-2. **Multi-tenant** — run one proxy, serve multiple tools
-3. **Observability** — standard HTTP logs, easy to proxy through nginx
-4. **No vendor lock-in** — swap to any OpenAI-compatible provider by changing
+1. **Composability** - plug into any OpenAI-compatible pipeline
+2. **Multi-tenant** - run one proxy, serve multiple tools
+3. **Observability** - standard HTTP logs, easy to proxy through nginx
+4. **No vendor lock-in** - swap to any OpenAI-compatible provider by changing
    one URL
-5. **Performance** — Rust + Pingora for sub-millisecond overhead
+5. **Performance** - Rust + Pingora for sub-millisecond overhead

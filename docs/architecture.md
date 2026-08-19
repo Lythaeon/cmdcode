@@ -22,12 +22,12 @@ Command Code's API uses a **custom wire protocol** that differs from OpenAI's
 standard `/v1/chat/completions`. The official `cmd` CLI is the only
 supported client. This proxy:
 
-1. **Breaks vendor lock-in** — use any OpenAI-compatible toolchain
-2. **Preserves API fingerprint** — sends the exact headers/body the CLI sends
+1. **Breaks vendor lock-in** - use any OpenAI-compatible toolchain
+2. **Preserves API fingerprint** - sends the exact headers/body the CLI sends
    so the upstream cannot distinguish proxy traffic from the real CLI
-3. **Production-grade** — Rust + Pingora for connection pooling, load balancing,
+3. **Production-grade** - Rust + Pingora for connection pooling, load balancing,
    and zero-copy I/O
-4. **Streaming support** — full SSE translation for both text and tool calls
+4. **Streaming support** - full SSE translation for both text and tool calls
 
 ## Wire format translation
 
