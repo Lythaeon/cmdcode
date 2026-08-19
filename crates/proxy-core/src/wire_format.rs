@@ -280,7 +280,8 @@ pub fn wire_messages(messages: &[OpenAiMessage]) -> Vec<CcMessage> {
                             items.push(CcContentItem::ToolCall {
                                 tool_call_id: tc_id,
                                 tool_name: name,
-                                input: serde_json::Value::String(args),
+                                input: serde_json::from_str::<serde_json::Value>(&args)
+                                    .unwrap_or(serde_json::Value::String(args)),
                             });
                         }
                     }
@@ -813,6 +814,75 @@ mod tests {
         assert_eq!(
             resp.usage.prompt_tokens_details.as_ref().unwrap().cached_tokens,
             2
+        );
+    }
+
+    #[test]
+    fn test_wire_messages_parses_tool_call_json_arguments() {
+        // OpenAI sends tool-call arguments as a JSON-encoded string. Command
+        // Code expects input as a real JSON value, so the proxy must parse it.
+        let messages = vec![OpenAiMessage {
+            role: "assistant".into(),
+            content: None,
+            tool_call_id: None,
+            tool_calls: Some(vec![OpenAiToolCall {
+                id: Some("call_1".into()),
+                function: Some(OpenAiFunctionRef {
+                    name: Some("edit_file".into()),
+                    arguments: Some(r#"{"path":"src/main.rs"}"#.into()),
+                }),
+            }]),
+        }];
+
+        let wire = wire_messages(&messages);
+        let found = wire
+            .iter()
+            .find_map(|m| match m {
+                CcMessage::Assistant { content } => content.iter().find_map(|c| match c {
+                    CcContentItem::ToolCall { input, .. } => Some(input),
+                    _ => None,
+                }),
+                _ => None,
+            });
+        assert!(found.is_some(), "expected a tool-call content item");
+        let input = found.unwrap();
+        assert!(
+            input.is_object(),
+            "JSON object arguments must parse to an object, got {input}"
+        );
+        assert_eq!(input["path"], "src/main.rs");
+    }
+
+    #[test]
+    fn test_wire_messages_tool_input_parse_fallback_to_string() {
+        // Unparseable arguments must remain a string, not be dropped.
+        let messages = vec![OpenAiMessage {
+            role: "assistant".into(),
+            content: None,
+            tool_call_id: None,
+            tool_calls: Some(vec![OpenAiToolCall {
+                id: Some("call_2".into()),
+                function: Some(OpenAiFunctionRef {
+                    name: Some("f".into()),
+                    arguments: Some("not-json-{".into()),
+                }),
+            }]),
+        }];
+
+        let wire = wire_messages(&messages);
+        let found = wire
+            .iter()
+            .find_map(|m| match m {
+                CcMessage::Assistant { content } => content.iter().find_map(|c| match c {
+                    CcContentItem::ToolCall { input, .. } => Some(input),
+                    _ => None,
+                }),
+                _ => None,
+            });
+        assert!(found.is_some(), "expected a tool-call content item");
+        assert!(
+            found.unwrap().is_string(),
+            "unparseable args must stay a string"
         );
     }
 }

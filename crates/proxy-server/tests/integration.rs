@@ -790,9 +790,10 @@ async fn test_benchmark_through_proxy_vs_direct() {
     assert!(proxy_ok >= n * 98 / 100, "proxy success rate too low: {}/{}", proxy_ok, n);
     assert!(direct_ok >= n * 98 / 100, "direct success rate too low: {}/{}", direct_ok, n);
 
-    // Proxy overhead must stay small on warm loopback (generous bound to avoid flakiness).
-    assert!(pp50 < dp50 + 25.0, "proxy p50 overhead too high: {:.3}ms vs direct {:.3}ms", pp50, dp50);
-    assert!(pp99 < dp99 + 50.0, "proxy p99 overhead too high: {:.3}ms vs direct {:.3}ms", pp99, dp99);
+    // Proxy overhead must stay small on warm loopback. Bounds are relative to
+    // the direct path so CI noise (which affects both paths equally) cancels.
+    assert!(pp50 < dp50 + 2.0, "proxy p50 overhead too high: {:.3}ms vs direct {:.3}ms", pp50, dp50);
+    assert!(pp99 < dp99 + 10.0, "proxy p99 overhead too high: {:.3}ms vs direct {:.3}ms", pp99, dp99);
 }
 
 // ============================================================

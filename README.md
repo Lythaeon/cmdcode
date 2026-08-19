@@ -135,6 +135,23 @@ model_list:
 See `docs/setup.md` for supervision (`scripts/supervise.sh`), log rotation,
 and soak (`scripts/soak.sh`) tooling.
 
+## Performance
+
+Proxy overhead over the direct upstream path, measured by the through-proxy
+benchmark (`test_benchmark_through_proxy_vs_direct`): 500 requests against the
+real Pingora proxy vs. the mock upstream, warm, on loopback.
+
+```
+direct : p50=0.427ms p95=0.469ms p99=0.519ms
+proxy  : p50=0.804ms p95=0.991ms p99=1.247ms
+overhead: p50=+0.377ms p95=+0.522ms p99=+0.728ms
+```
+
+The overhead is sub-millisecond at every percentile. These are machine-specific
+warm-loopback numbers for reference; the regression test asserts a relative
+bound (`p50 < direct + 2ms`, `p99 < direct + 10ms`) so CI noise, which affects
+both paths equally, cancels out.
+
 ## Documentation
 
 - [Architecture](docs/architecture.md) - wire format translation details

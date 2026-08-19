@@ -35,9 +35,12 @@ impl UpstreamClient {
             .build()
             .expect("failed to build HTTP client");
 
-        let semaphore = config.max_concurrent
-            .checked_add(1)
-            .map(Semaphore::new);
+        let semaphore = if config.max_concurrent == 0 {
+            // 0 means unlimited — no concurrency cap.
+            None
+        } else {
+            Some(Semaphore::new(config.max_concurrent))
+        };
 
         Self { http, config, auth, metrics, semaphore }
     }
@@ -212,6 +215,11 @@ impl UpstreamClient {
 
                         tokio::spawn(async move {
                             use futures::StreamExt;
+                            // Hold the concurrency permit for the full stream
+                            // lifetime: it is released when this task exits
+                            // (stream ends, errors, or the client gives up),
+                            // not when forward_request returns.
+                            let _ = _permit;
                             let mut buffer = String::new();
                             let mut stream = std::pin::pin!(stream);
                             let created = chrono_now_secs();
@@ -783,5 +791,71 @@ mod tests {
             "[fuzz] {iterations} iterations, {emitted} emitted, {parsed_ok} parseable in {seconds}s"
         );
         assert!(iterations > 0);
+    }
+
+    fn test_config(max_concurrent: usize) -> proxy_core::config::ProxyConfig {
+        proxy_core::config::ProxyConfig {
+            listen_addr: "127.0.0.1:18080".into(),
+            upstream_url: "https://api.commandcode.ai".into(),
+            default_model: "xiaomi/mimo-v2.5".into(),
+            upstream_timeout_secs: 30,
+            max_retries: 0,
+            max_concurrent,
+            cors_origin: None,
+            model_allowlist: None,
+            auth_dir: std::path::PathBuf::from("/tmp/test/.commandcode"),
+            auth_cache_ttl_secs: 30,
+            log_level: "error".into(),
+            max_body_size: 10 * 1024 * 1024,
+            stream_idle_timeout_secs: 180,
+            log_file: None,
+            log_max_bytes: 50 * 1024 * 1024,
+            log_keep: 5,
+            tls_cert: None,
+            tls_key: None,
+            incoming_token: None,
+        }
+    }
+
+    #[test]
+    fn test_semaphore_zero_means_unlimited() {
+        let config = Arc::new(test_config(0));
+        let auth = Arc::new(proxy_core::auth::AuthManager::new(
+            std::path::PathBuf::from("/tmp/none"),
+            30,
+        ));
+        let metrics = Arc::new(Metrics::new());
+        let client = UpstreamClient::new(config, auth, metrics);
+        assert!(client.semaphore.is_none(), "0 concurrent must mean unlimited (None)");
+    }
+
+    #[test]
+    fn test_semaphore_n_permits_for_n() {
+        let config = Arc::new(test_config(5));
+        let auth = Arc::new(proxy_core::auth::AuthManager::new(
+            std::path::PathBuf::from("/tmp/none"),
+            30,
+        ));
+        let metrics = Arc::new(Metrics::new());
+        let client = UpstreamClient::new(config, auth, metrics);
+        let sem = client.semaphore.as_ref().expect("5 must create a semaphore");
+        assert_eq!(sem.available_permits(), 5, "5 concurrent must allow exactly 5 permits");
+    }
+
+    #[tokio::test]
+    async fn test_semaphore_permit_released_on_scope_end() {
+        let config = Arc::new(test_config(1));
+        let auth = Arc::new(proxy_core::auth::AuthManager::new(
+            std::path::PathBuf::from("/tmp/none"),
+            30,
+        ));
+        let metrics = Arc::new(Metrics::new());
+        let client = UpstreamClient::new(config, auth, metrics);
+        let sem = client.semaphore.as_ref().expect("semaphore");
+
+        let permit = sem.acquire().await.unwrap();
+        assert_eq!(sem.available_permits(), 0);
+        drop(permit);
+        assert_eq!(sem.available_permits(), 1, "permit must return on drop");
     }
 }
