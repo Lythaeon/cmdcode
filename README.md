@@ -23,20 +23,20 @@ traffic from the official `cmd` CLI.
 ## Quick start
 
 ```bash
-# Prerequisites: Python 3.8+, command-code CLI authenticated
+# Prerequisites: Rust 1.75+, command-code CLI authenticated
 
 git clone https://github.com/Lythaeon/command-code-openapi-proxy.git
 cd command-code-openapi-proxy
 
 # Run
-python3 -m command_code_proxy.proxy
+cargo run --release
 # listening on http://127.0.0.1:18080
 
 # Test
 curl http://127.0.0.1:18080/v1/models
 curl http://127.0.0.1:18080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"gpt-5.6-luna","messages":[{"role":"user","content":"Hello"}]}'
+  -d '{"model":"xiaomi/mimo-v2.5","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
 ## Features
@@ -44,14 +44,14 @@ curl http://127.0.0.1:18080/v1/chat/completions \
 - **OpenAI-compatible** — `/v1/chat/completions` (stream + non-stream)
 - **Streaming** — full SSE translation (text, reasoning, tool calls)
 - **Tool calls** — OpenAI function calling ↔ Command Code tool-call format
-- **Zero dependencies** — Python 3.8+ stdlib only
+- **Rust + Pingora** — production-grade, sub-millisecond overhead
 - **CLI fingerprint** — sends the exact headers/body the `cmd` CLI sends
-- **Self-updating** — detects and installs newer CLI versions automatically
+- **Auto-discovery** — model catalog parsed from CLI's bundled `models.md`
+- **Reasoning effort** — `low`/`medium`/`high`/`xhigh`/`max` support
 - **Retry logic** — automatic retry on transient upstream failures (502/503/504)
 - **Health check** — `GET /health` for monitoring
 - **CORS** — optional CORS headers for browser clients
-- **Concurrency** — `ThreadingHTTPServer` handles multiple simultaneous agents
-- **Structured logging** — request IDs, latency, upstream status
+- **Concurrency** — Pingora handles multiple simultaneous agents
 
 ## Wire it into OpenCode
 
@@ -67,8 +67,8 @@ Add to your `opencode.json`:
         "baseURL": "http://localhost:18080/v1"
       },
       "models": {
-        "gpt-5.6-luna": { "name": "GPT-5.6 Luna", "reasoning": true },
-        "xiaomi/mimo-v2.5-pro": { "name": "MiMo V2.5 Pro", "reasoning": true }
+        "xiaomi/mimo-v2.5": { "name": "MiMo V2.5", "reasoning": true },
+        "gpt-5.6-luna": { "name": "GPT-5.6 Luna", "reasoning": true }
       }
     }
   },
@@ -99,7 +99,7 @@ const client = new OpenAI({ baseURL: "http://127.0.0.1:18080", apiKey: "not-need
 model_list:
   - model_name: command-code
     litellm_params:
-      model: openai/gpt-5.6-luna
+      model: openai/xiaomi/mimo-v2.5
       api_base: http://127.0.0.1:18080
       api_key: not-needed
 ```
@@ -114,6 +114,8 @@ model_list:
 | `COMMAND_CODE_PROXY_TIMEOUT` | `600` | Upstream timeout (seconds) |
 | `COMMAND_CODE_PROXY_RETRIES` | `2` | Retry count for transient failures |
 | `COMMAND_CODE_PROXY_CORS` | (unset) | CORS origin header |
+| `COMMAND_CODE_PROXY_DEFAULT` | `xiaomi/mimo-v2.5` | Default model |
+| `COMMAND_CODE_PROXY_MODELS` | (unset) | Comma-separated model allowlist |
 
 ## Endpoints
 
@@ -122,14 +124,6 @@ model_list:
 | `GET` | `/v1/models` | List available models |
 | `GET` | `/health` | Health check (status, version, upstream) |
 | `POST` | `/v1/chat/completions` | Chat completion (stream + non-stream) |
-
-## Install as systemd service
-
-```bash
-cp systemd/command-code-proxy.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now command-code-proxy
-```
 
 ## Documentation
 

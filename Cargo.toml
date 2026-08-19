@@ -1,0 +1,82 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/proxy-core",
+    "crates/proxy-server",
+    "crates/proxy-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/Lythaeon/command-code-openapi-proxy-rs"
+
+[workspace.dependencies]
+proxy-core = { path = "crates/proxy-core" }
+proxy-server = { path = "crates/proxy-server" }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+pingora-core = "0.8"
+pingora-proxy = "0.8"
+pingora-http = "0.8"
+pingora-error = "0.8"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+overflow-checks = true
+
+[profile.dev]
+debug = 2
+opt-level = 0
+overflow-checks = true
+incremental = false
+panic = "unwind"
+
+[workspace.lints.rust]
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+inefficient_to_string = "deny"
+todo = "deny"
+unimplemented = "deny"
+panic = "deny"
+result_large_err = "deny"
+map_err_ignore = "deny"
+unreachable = "deny"
+dbg_macro = "deny"
+ignored_unit_patterns = "deny"
+await_holding_refcell_ref = "deny"
+if_same_then_else = "deny"
+filter_map_next = "deny"
+iter_not_returning_iterator = "deny"
+needless_collect = "deny"
+undocumented_unsafe_blocks = "deny"
+match_wild_err_arm = "deny"
+panic_in_result_fn = "deny"
+unwrap_in_result = "deny"
+unnecessary_wraps = "deny"
+or_fun_call = "deny"
+ok_expect = "deny"
+await_holding_lock = "deny"
+mutex_atomic = "deny"
+wildcard_dependencies = "deny"
+enum_glob_use = "deny"
+mutable_key_type = "deny"
+large_enum_variant = "deny"
+vec_box = "deny"
+bool_assert_comparison = "deny"
+cmp_owned = "deny"
+assertions_on_constants = "deny"
+box_collection = "deny"
+unnecessary_box_returns = "deny"
+flat_map_option = "deny"

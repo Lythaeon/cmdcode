@@ -1,0 +1,15 @@
+[package]
+name = "proxy-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "command-code-proxy"
+path = "src/main.rs"
+
+[dependencies]
+proxy-core.workspace = true
+proxy-server.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

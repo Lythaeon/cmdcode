@@ -4,7 +4,8 @@
 
 A local HTTP proxy that speaks the **OpenAI chat completions API** on the
 client side and translates to **Command Code's proprietary wire protocol** on
-the upstream side.
+the upstream side. Written in Rust using Pingora for production-grade
+performance.
 
 ```
 ┌──────────────────────┐         ┌──────────────────┐         ┌─────────────────────────────┐
@@ -24,7 +25,8 @@ supported client. This proxy:
 1. **Breaks vendor lock-in** — use any OpenAI-compatible toolchain
 2. **Preserves API fingerprint** — sends the exact headers/body the CLI sends
    so the upstream cannot distinguish proxy traffic from the real CLI
-3. **Zero-dependency** — Python 3.8+ standard library only (no pip installs)
+3. **Production-grade** — Rust + Pingora for connection pooling, load balancing,
+   and zero-copy I/O
 4. **Streaming support** — full SSE translation for both text and tool calls
 
 ## Wire format translation
@@ -98,15 +100,4 @@ OpenAI messages are converted to Command Code's content-array format:
 - `"role": "assistant", "tool_calls": [...]` → `{"role": "assistant", "content": [{"type": "tool-call", ...}]}`
 - `"role": "tool", "content": "result"` → `{"role": "tool", "content": [{"type": "tool-result", ...}]}`
 
-## Files
 
-```
-src/command_code_proxy/
-  __init__.py        — package metadata
-  wire_format.py     — shared helpers (auth, headers, git context, translation)
-  proxy.py           — HTTP server and OpenAI endpoint handlers
-bin/
-  command-code-proxy — standalone CLI entry point
-systemd/
-  command-code-proxy.service — systemd user unit
-```

@@ -1,0 +1,32 @@
+[package]
+name = "proxy-server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+proxy-core.workspace = true
+pingora-core.workspace = true
+pingora-proxy.workspace = true
+pingora-http.workspace = true
+pingora-error.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest = { version = "0.12", features = ["json", "stream"] }
+url = "2"
+async-trait = "0.1"
+futures = "0.3"
+time = { version = "0.3", features = ["formatting", "macros"] }
+bytes = "1"
+http = "1"
+http-body = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
+serde_json = "1"

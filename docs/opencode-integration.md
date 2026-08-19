@@ -17,7 +17,7 @@ OpenCode ──> localhost:18080/v1/chat/completions ──> Command Code API
 
 ```bash
 cd /path/to/command-code-openapi-proxy
-python3 -m command_code_proxy.proxy
+cargo run --release
 # listening on http://127.0.0.1:18080
 ```
 
@@ -37,8 +37,8 @@ Add a custom provider in your `opencode.json`:
         "baseURL": "http://localhost:18080/v1"
       },
       "models": {
-        "gpt-5.6-luna": { "name": "GPT-5.6 Luna", "reasoning": true },
-        "xiaomi/mimo-v2.5-pro": { "name": "MiMo V2.5 Pro", "reasoning": true }
+        "xiaomi/mimo-v2.5": { "name": "MiMo V2.5", "reasoning": true },
+        "gpt-5.6-luna": { "name": "GPT-5.6 Luna", "reasoning": true }
       }
     }
   },
@@ -82,7 +82,7 @@ Or use a specific model directly:
 {
   "agent": {
     "sc-finder": {
-      "model": "command-code/gpt-5.6-luna"
+      "model": "command-code/xiaomi/mimo-v2.5"
     }
   }
 }
@@ -90,18 +90,32 @@ Or use a specific model directly:
 
 ## Available models
 
-The proxy forwards whatever model ID you send. Common models:
+The proxy auto-discovers models from the installed `command-code` CLI.
+Common models include:
 
 | Model ID | Description |
 |----------|-------------|
+| `xiaomi/mimo-v2.5` | MiMo V2.5 (reasoning) |
 | `gpt-5.6-luna` | GPT-5.6 Luna (reasoning) |
 | `gpt-5.6-sol` | GPT-5.6 Sol (reasoning) |
-| `gpt-5.6-terra` | GPT-5.6 Terra (reasoning) |
-| `xiaomi/mimo-v2.5-pro` | MiMo V2.5 Pro (reasoning) |
 | `deepseek/deepseek-v4-pro` | DeepSeek V4 Pro (reasoning) |
 | `claude-sonnet-5` | Claude Sonnet 5 (reasoning) |
 
 Models above your subscription plan are rejected (403) by the upstream API.
+
+## Reasoning effort
+
+Control reasoning depth with the `reasoning_effort` parameter or
+model:effort syntax:
+
+```json
+{
+  "model": "claude-sonnet-5:high",
+  "messages": [{"role": "user", "content": "Analyze this code"}]
+}
+```
+
+Effort levels: `low`, `medium`, `high`, `xhigh`, `max`
 
 ## Wire in any OpenAI-compatible harness
 
@@ -113,7 +127,7 @@ The proxy works with **any** tool that speaks the OpenAI chat completions API:
 model_list:
   - model_name: command-code
     litellm_params:
-      model: openai/gpt-5.6-luna
+      model: openai/xiaomi/mimo-v2.5
       api_base: http://127.0.0.1:18080
       api_key: not-needed
 ```
@@ -124,7 +138,7 @@ model_list:
 curl http://127.0.0.1:18080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gpt-5.6-luna",
+    "model": "xiaomi/mimo-v2.5",
     "messages": [{"role": "user", "content": "Hello"}],
     "stream": true
   }'
@@ -141,7 +155,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="gpt-5.6-luna",
+    model="xiaomi/mimo-v2.5",
     messages=[{"role": "user", "content": "Hello"}],
 )
 print(response.choices[0].message.content)
@@ -158,7 +172,7 @@ const client = new OpenAI({
 });
 
 const response = await client.chat.completions.create({
-  model: "gpt-5.6-luna",
+  model: "xiaomi/mimo-v2.5",
   messages: [{ role: "user", content: "Hello" }],
 });
 console.log(response.choices[0].message.content);
@@ -173,3 +187,4 @@ The official `cmd` CLI is a monolithic Node.js harness. The proxy gives you:
 3. **Observability** — standard HTTP logs, easy to proxy through nginx
 4. **No vendor lock-in** — swap to any OpenAI-compatible provider by changing
    one URL
+5. **Performance** — Rust + Pingora for sub-millisecond overhead

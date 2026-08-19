@@ -3,25 +3,41 @@
 # Reads ~/.commandcode/auth.json per request.
 #
 # Install:
-#   cp systemd/command-code-proxy.service ~/.config/systemd/user/
-#   systemctl --user daemon-reload
-#   systemctl --user enable --now command-code-proxy
-#   journalctl --user -u command-code-proxy -f
+#   1. Build the release binary:
+#      cargo build --release
 #
-# Overrides:
-#   COMMAND_CODE_API_BASE   (default https://api.commandcode.ai)
-#   COMMAND_CODE_PROXY_PORT (default 18080)
-#   COMMAND_CODE_PROXY_HOST (default 127.0.0.1)
+#   2. Copy the binary to a location in your PATH:
+#      cp target/release/command-code-proxy ~/.local/bin/
+#
+#   3. Copy this service file:
+#      cp systemd/command-code-proxy.service ~/.config/systemd/user/
+#
+#   4. Edit the ExecStart path in the service file to point to your binary.
+#
+#   5. Reload and start:
+#      systemctl --user daemon-reload
+#      systemctl --user enable --now command-code-proxy
+#
+#   6. Check status/logs:
+#      systemctl --user status command-code-proxy
+#      journalctl --user -u command-code-proxy -f
+#
+# Environment overrides:
+#   COMMAND_CODE_API_BASE    (default https://api.commandcode.ai)
+#   COMMAND_CODE_PROXY_PORT  (default 18080)
+#   COMMAND_CODE_PROXY_HOST  (default 127.0.0.1)
+#   COMMAND_CODE_PROXY_TIMEOUT (default 600)
+#   COMMAND_CODE_PROXY_RETRIES  (default 2)
 [Unit]
 Description=Command Code OpenAI-compatible translation proxy
 After=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/env python3 -m command_code_proxy.proxy
+ExecStart=/home/YOUR_USERNAME/.local/bin/command-code-proxy
 Restart=on-failure
 RestartSec=3
-Environment=PYTHONUNBUFFERED=1
+Environment=RUST_LOG=info
 
 [Install]
 WantedBy=default.target

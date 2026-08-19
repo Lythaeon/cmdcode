@@ -1,0 +1,131 @@
+pub mod handler;
+pub mod upstream;
+
+use pingora_core::server::Server;
+use proxy_core::auth::AuthManager;
+use proxy_core::config::ProxyConfig;
+use std::sync::Arc;
+
+pub struct ProxyService {
+    pub config: Arc<ProxyConfig>,
+    pub auth: Arc<AuthManager>,
+}
+
+impl ProxyService {
+    pub fn new(config: ProxyConfig, auth: AuthManager) -> Self {
+        Self {
+            config: Arc::new(config),
+            auth: Arc::new(auth),
+        }
+    }
+
+    pub fn run(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut server = Server::new(None)?;
+        server.bootstrap();
+
+        let upstream_host = extract_host(&self.config.upstream_url)?;
+        let upstream_port = extract_port(&self.config.upstream_url);
+        let tls = self.config.upstream_url.starts_with("https");
+
+        let listen_addr = self.config.listen_addr.clone();
+
+        let ctx = handler::CommandCodeProxy {
+            config: self.config,
+            auth: self.auth,
+            upstream_host,
+            upstream_port,
+            upstream_tls: tls,
+        };
+
+        let mut my_proxy = handler::create_http_proxy_service(&server.configuration, ctx);
+        my_proxy.add_tcp(&listen_addr);
+        server.add_service(my_proxy);
+
+        server.run_forever();
+    }
+}
+
+fn extract_host(url: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let without_scheme = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    // Strip path and port
+    let host = without_scheme
+        .split('/')
+        .next()
+        .unwrap_or(without_scheme)
+        .split(':')
+        .next()
+        .unwrap_or(without_scheme)
+        .to_string();
+    if host.is_empty() {
+        return Err("empty host".into());
+    }
+    Ok(host)
+}
+
+fn extract_port(url: &str) -> u16 {
+    if url.starts_with("https") {
+        url.split(':')
+            .nth(2)
+            .and_then(|s| s.split('/').next())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(443)
+    } else {
+        url.split(':')
+            .nth(2)
+            .and_then(|s| s.split('/').next())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(80)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_extract_host() {
+        assert_eq!(
+            extract_host("https://api.commandcode.ai").unwrap(),
+            "api.commandcode.ai"
+        );
+        assert_eq!(
+            extract_host("http://localhost:9090").unwrap(),
+            "localhost"
+        );
+        assert_eq!(
+            extract_host("https://api.commandcode.ai/alpha/generate").unwrap(),
+            "api.commandcode.ai"
+        );
+    }
+
+    #[test]
+    fn test_extract_port() {
+        assert_eq!(extract_port("https://api.commandcode.ai"), 443);
+        assert_eq!(extract_port("http://localhost:9090"), 9090);
+        assert_eq!(extract_port("http://localhost"), 80);
+        assert_eq!(extract_port("https://example.com:8443"), 8443);
+    }
+
+    #[test]
+    fn test_proxy_service_creation() {
+        let config = ProxyConfig {
+            listen_addr: "127.0.0.1:18080".into(),
+            upstream_url: "https://api.commandcode.ai".into(),
+            default_model: "xiaomi/mimo-v2.5".into(),
+            upstream_timeout_secs: 600,
+            max_retries: 2,
+            max_concurrent: 0,
+            cors_origin: None,
+            model_allowlist: None,
+            auth_dir: PathBuf::from("/tmp/test/.commandcode"),
+            auth_cache_ttl_secs: 30,
+            log_level: "info".into(),
+        };
+        let auth = AuthManager::new(config.auth_dir.clone(), 30);
+        let _service = ProxyService::new(config, auth);
+    }
+}
