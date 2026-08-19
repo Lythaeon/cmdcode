@@ -34,7 +34,7 @@ After=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/home/YOUR_USERNAME/.local/bin/command-code-proxy
+ExecStart=/home/ac/.local/bin/command-code-proxy
 Restart=on-failure
 RestartSec=3
 Environment=RUST_LOG=info

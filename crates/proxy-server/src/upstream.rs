@@ -66,28 +66,48 @@ impl UpstreamClient {
         let wire_tools = wire_tools(body.tools.as_deref().unwrap_or_default());
         let max_tokens = body.max_tokens.unwrap_or(64000);
 
+        let mut params = serde_json::json!({
+            "model": model.as_str(),
+            "messages": wire_msgs,
+            "tools": wire_tools,
+            "max_tokens": max_tokens,
+            "stream": true,
+        });
+        let params_obj = params.as_object_mut().expect("params is an object");
+
+        if let Some(system) = extract_system(&body.messages) {
+            params_obj.insert("system".into(), serde_json::Value::String(system));
+        }
+        if let Some(t) = body.temperature {
+            params_obj.insert("temperature".into(), serde_json::json!(t));
+        }
+        if let Some(e) = effort {
+            params_obj.insert("reasoning_effort".into(), serde_json::json!(e.as_str()));
+        }
+        if let Some(p) = body.top_p {
+            params_obj.insert("top_p".into(), serde_json::json!(p));
+        }
+        if let Some(fp) = body.frequency_penalty {
+            params_obj.insert("frequency_penalty".into(), serde_json::json!(fp));
+        }
+        if let Some(pp) = body.presence_penalty {
+            params_obj.insert("presence_penalty".into(), serde_json::json!(pp));
+        }
+        if let Some(stop) = &body.stop {
+            params_obj.insert("stop".into(), serde_json::to_value(stop).unwrap_or_default());
+        }
+        if let Some(user) = &body.user {
+            params_obj.insert("user".into(), serde_json::json!(user));
+        }
+
         let upstream_body = serde_json::json!({
-            "config": {},
+            "config": build_config(&cwd),
             "memory": null,
             "taste": null,
             "skills": null,
             "permissionMode": "standard",
             "mode": "agent",
-            "params": {
-                "model": model.as_str(),
-                "messages": wire_msgs,
-                "tools": wire_tools,
-                "max_tokens": max_tokens,
-                "stream": true,
-                "system": extract_system(&body.messages),
-                "temperature": body.temperature,
-                "reasoning_effort": effort.map(|e| e.as_str()),
-                "frequency_penalty": body.frequency_penalty,
-                "presence_penalty": body.presence_penalty,
-                "top_p": body.top_p,
-                "stop": body.stop.as_ref().map(|s| serde_json::to_value(s).unwrap_or_default()),
-                "user": body.user.as_deref(),
-            }
+            "params": params,
         });
 
         let url = format!("{}/alpha/generate", self.config.upstream_url);
@@ -360,6 +380,57 @@ impl UpstreamClient {
 
 fn is_retryable(status: u16) -> bool {
     matches!(status, 502 | 503 | 504)
+}
+
+/// Build the config block the upstream requires (workingDir, date, ...).
+/// No subprocess calls — git state is reported as clean/non-repo.
+fn build_config(cwd: &str) -> serde_json::Value {
+    use std::time::SystemTime;
+
+    let date = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| {
+            let days = d.as_secs() / 86400;
+            let (y, m, day) = civil_from_days(days as i64);
+            format!("{y:04}-{m:02}-{day:02}")
+        })
+        .unwrap_or_default();
+
+    let structure: Vec<String> = std::fs::read_dir(cwd)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .filter(|n| !n.starts_with('.'))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    serde_json::json!({
+        "workingDir": cwd,
+        "date": date,
+        "environment": "linux",
+        "structure": structure,
+        "isGitRepo": false,
+        "currentBranch": "",
+        "mainBranch": "",
+        "gitStatus": "",
+        "recentCommits": [],
+    })
+}
+
+/// Days since 1970-01-01 to civil (year, month, day) — Howard Hinnant's algorithm.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
 fn chrono_now_secs() -> i64 {

@@ -137,6 +137,7 @@ fn find_models_md() -> Option<PathBuf> {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let candidates = [
         home.join(".linuxbrew/lib/node_modules/command-code/dist/bundled/command-code-knowledge/reference/models.md"),
+        PathBuf::from("/home/linuxbrew/.linuxbrew/lib/node_modules/command-code/dist/bundled/command-code-knowledge/reference/models.md"),
         PathBuf::from("/usr/local/lib/node_modules/command-code/dist/bundled/command-code-knowledge/reference/models.md"),
     ];
 
@@ -206,5 +207,17 @@ mod tests {
         assert_eq!(parse_context_window("1.05M"), ContextWindow::new(1_050_000));
         assert_eq!(parse_context_window("—"), ContextWindow::new(0));
         assert_eq!(parse_context_window(""), ContextWindow::new(0));
+    }
+
+    #[test]
+    fn test_find_models_md_candidates() {
+        let home = dirs::home_dir().unwrap();
+        let candidates = [
+            home.join(".linuxbrew/lib/node_modules/command-code/dist/bundled/command-code-knowledge/reference/models.md"),
+            PathBuf::from("/home/linuxbrew/.linuxbrew/lib/node_modules/command-code/dist/bundled/command-code-knowledge/reference/models.md"),
+            PathBuf::from("/usr/local/lib/node_modules/command-code/dist/bundled/command-code-knowledge/reference/models.md"),
+        ];
+        let found = candidates.iter().any(|p| p.exists());
+        assert!(found, "none of the bundled models.md candidates exist on this machine");
     }
 }

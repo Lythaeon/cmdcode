@@ -42,6 +42,7 @@ impl ProxyService {
     }
 }
 
+#[cfg(test)]
 fn extract_host(url: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let without_scheme = url
         .strip_prefix("https://")
@@ -61,6 +62,7 @@ fn extract_host(url: &str) -> Result<String, Box<dyn std::error::Error + Send + 
     Ok(host)
 }
 
+#[cfg(test)]
 fn extract_port(url: &str) -> u16 {
     if url.starts_with("https") {
         url.split(':')
