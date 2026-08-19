@@ -686,6 +686,12 @@ async fn test_benchmark_through_proxy_vs_direct() {
         log_level: "error".into(),
         max_body_size: 10 * 1024 * 1024,
         stream_idle_timeout_secs: 180,
+        log_file: None,
+        log_max_bytes: 50 * 1024 * 1024,
+        log_keep: 5,
+        tls_cert: None,
+        tls_key: None,
+        incoming_token: None,
     };
     let auth = proxy_core::auth::AuthManager::new(auth_dir.clone(), 60);
 
@@ -796,6 +802,16 @@ async fn test_benchmark_through_proxy_vs_direct() {
 /// Start a real Pingora proxy instance pointing at `mock_addr`.
 /// Returns the proxy base URL (e.g. http://127.0.0.1:PORT).
 async fn start_proxy(mock_addr: SocketAddr, retries: u32, idle_timeout_secs: u64) -> String {
+    start_proxy_impl(mock_addr, retries, idle_timeout_secs, None).await
+}
+
+/// Like `start_proxy` but optionally enforces an incoming bearer token.
+async fn start_proxy_impl(
+    mock_addr: SocketAddr,
+    retries: u32,
+    idle_timeout_secs: u64,
+    incoming_token: Option<&str>,
+) -> String {
     let auth_dir = std::env::temp_dir().join(format!(
         "cc-proxy-chaos-auth-{}-{}",
         std::process::id(),
@@ -823,6 +839,12 @@ async fn start_proxy(mock_addr: SocketAddr, retries: u32, idle_timeout_secs: u64
         log_level: "error".into(),
         max_body_size: 10 * 1024 * 1024,
         stream_idle_timeout_secs: idle_timeout_secs,
+        log_file: None,
+        log_max_bytes: 50 * 1024 * 1024,
+        log_keep: 5,
+        tls_cert: None,
+        tls_key: None,
+        incoming_token: incoming_token.map(|t| t.to_string()),
     };
     let auth = proxy_core::auth::AuthManager::new(auth_dir, 60);
 
@@ -1083,4 +1105,83 @@ async fn test_chaos_through_proxy_idle_timeout_abort() {
     assert!(body.contains("first"));
     assert!(!body.contains("[DONE]"), "idle-timeout abort must not emit [DONE]");
     assert!(start.elapsed() >= std::time::Duration::from_secs(1));
+}
+
+#[tokio::test]
+async fn test_e2e_metrics_endpoint() {
+    let mock_addr = MockUpstream::normal().start().await;
+    let proxy = start_proxy(mock_addr, 0, 180).await;
+
+    // Drive one real request so counters are non-zero.
+    let (status, _) = proxy_chat(&proxy, CHAT_BODY).await;
+    assert_eq!(status, 200);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap();
+    let resp = client.get(format!("{}/metrics", proxy)).send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(ct.contains("text/plain"), "expected text/plain, got {ct}");
+
+    let body = resp.text().await.unwrap();
+    assert!(body.contains("command_code_proxy_requests_total"));
+    assert!(body.contains("# TYPE command_code_proxy_requests_total counter"));
+    assert!(body.contains("command_code_proxy_active_streams"));
+    assert!(body.contains("# TYPE command_code_proxy_active_streams gauge"));
+}
+
+#[tokio::test]
+async fn test_e2e_incoming_auth_required() {
+    let mock_addr = MockUpstream::normal().start().await;
+    let proxy = start_proxy_impl(mock_addr, 0, 180, Some("correct-horse")).await;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap();
+
+    // Without token -> 401.
+    let resp = client
+        .post(format!("{}/v1/chat/completions", proxy))
+        .header("content-type", "application/json")
+        .body(CHAT_BODY)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 401);
+
+    // Wrong token -> 401.
+    let resp = client
+        .post(format!("{}/v1/chat/completions", proxy))
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer wrong-horse")
+        .body(CHAT_BODY)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 401);
+
+    // Correct token -> proxied through (200).
+    let resp = client
+        .post(format!("{}/v1/chat/completions", proxy))
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer correct-horse")
+        .body(CHAT_BODY)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+
+    // /health and /metrics stay open without a token.
+    let health = client.get(format!("{}/health", proxy)).send().await.unwrap();
+    assert_eq!(health.status().as_u16(), 200);
+    let metrics = client.get(format!("{}/metrics", proxy)).send().await.unwrap();
+    assert_eq!(metrics.status().as_u16(), 200);
 }

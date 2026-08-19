@@ -13,12 +13,14 @@ use proxy_core::model_catalog::get_model_catalog;
 use proxy_core::types::RequestId;
 use proxy_core::wire_format::ChatCompletionRequest;
 
+use crate::metrics::Metrics;
 use crate::upstream::{self, UpstreamClient};
 
 pub struct CommandCodeProxy {
     pub config: Arc<ProxyConfig>,
     pub auth: Arc<AuthManager>,
     pub upstream_client: Arc<UpstreamClient>,
+    pub metrics: Arc<Metrics>,
 }
 
 pub struct RequestCtx {
@@ -104,10 +106,15 @@ impl ProxyHttp for CommandCodeProxy {
                 self.handle_health(session).await?;
                 return Ok(true);
             }
+            "/metrics" if method == http::Method::GET => {
+                self.handle_metrics(session).await?;
+                return Ok(true);
+            }
             "/v1/chat/completions" | "/chat/completions" if method == http::Method::POST => {
                 // Continue to upstream
             }
             _ => {
+                self.metrics.inc_unknown_route();
                 let err = serde_json::json!({
                     "error": {
                         "message": format!("Unknown route {}", path),
@@ -119,6 +126,29 @@ impl ProxyHttp for CommandCodeProxy {
             }
         }
 
+        // Optional incoming-auth gate. /health and /metrics stay open for
+        // monitors and scrapers; every other route requires the token.
+        if let Some(ref expected) = self.config.incoming_token {
+            let provided = session
+                .req_header()
+                .headers
+                .get(http::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "))
+                .unwrap_or("");
+            if !constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+                self.metrics.inc_error();
+                let err = serde_json::json!({
+                    "error": {
+                        "message": "invalid or missing api key",
+                        "type": "invalid_request_error"
+                    }
+                });
+                self.send_json(session, 401, &err).await?;
+                return Ok(true);
+            }
+        }
+
         // Read and parse body with size limit.
         // read_request_body() returns at most one 64KB chunk per call —
         // loop until None to collect the full body.
@@ -126,6 +156,7 @@ impl ProxyHttp for CommandCodeProxy {
         while let Some(chunk) = session.read_request_body().await? {
             body_bytes.extend_from_slice(&chunk);
             if body_bytes.len() > self.config.max_body_size {
+                self.metrics.inc_body_too_large();
                 let err = serde_json::json!({
                     "error": {
                         "message": format!("Request body too large: {} bytes (max {})", body_bytes.len(), self.config.max_body_size),
@@ -140,6 +171,7 @@ impl ProxyHttp for CommandCodeProxy {
         let body: ChatCompletionRequest = match serde_json::from_slice(&body_bytes) {
             Ok(b) => b,
             Err(e) => {
+                self.metrics.inc_bad_requests();
                 let err = serde_json::json!({
                     "error": {
                         "message": format!("Invalid JSON body: {}", e),
@@ -161,6 +193,7 @@ impl ProxyHttp for CommandCodeProxy {
 
         if let Some(ref allowlist) = self.config.model_allowlist {
             if !allowlist.contains(model.as_str()) {
+                self.metrics.inc_model_denied();
                 let err = serde_json::json!({
                     "error": {
                         "message": format!("Model '{}' is not in the allowed models list", model.as_str()),
@@ -181,6 +214,9 @@ impl ProxyHttp for CommandCodeProxy {
             "request received"
         );
 
+        let is_stream = body.stream.unwrap_or(false);
+        self.metrics.inc_request(is_stream);
+
         // Forward to upstream
         let start = Instant::now();
         let result = self.upstream_client.forward_request(&model, &body, effort).await;
@@ -192,6 +228,7 @@ impl ProxyHttp for CommandCodeProxy {
                     elapsed_ms = start.elapsed().as_millis() as u64,
                     "completed (non-stream)"
                 );
+                self.metrics.inc_bytes_out(completion.to_string().len());
                 self.send_json(session, 200, &completion).await?;
                 Ok(true)
             }
@@ -201,6 +238,7 @@ impl ProxyHttp for CommandCodeProxy {
                     elapsed_ms = start.elapsed().as_millis() as u64,
                     "starting stream"
                 );
+                self.metrics.stream_started();
 
                 let mut resp = pingora_http::ResponseHeader::build(200, None)?;
                 resp.insert_header("content-type", "text/event-stream")?;
@@ -210,14 +248,16 @@ impl ProxyHttp for CommandCodeProxy {
 
                 let idle_timeout = std::time::Duration::from_secs(self.config.stream_idle_timeout_secs);
                 let mut chunks = 0u32;
+                let mut bytes_out = 0usize;
                 let mut client_gone = false;
                 loop {
                     let recv = tokio::time::timeout(idle_timeout, rx.recv()).await;
                     match recv {
                         Ok(Some(Ok(line))) => {
-                            if let Err(e) = session.write_response_body(Some(Bytes::from(line)), false).await {
+                            if let Err(e) = session.write_response_body(Some(Bytes::from(line.clone())), false).await {
                                 if is_client_disconnect(&e) {
                                     tracing::warn!(request_id = %ctx.request_id.as_str(), "client disconnected; aborting stream");
+                                    self.metrics.inc_client_disconnect();
                                     client_gone = true;
                                 } else {
                                     return Err(e);
@@ -225,13 +265,16 @@ impl ProxyHttp for CommandCodeProxy {
                                 break;
                             }
                             chunks += 1;
+                            bytes_out += line.len();
                         }
                         Ok(Some(Err(e))) => {
                             tracing::error!(request_id = %ctx.request_id.as_str(), error = %e, "stream error");
+                            self.metrics.inc_error();
                             break;
                         }
                         Ok(None) => break,
                         Err(_) => {
+                            self.metrics.inc_upstream_timeout();
                             tracing::error!(
                                 request_id = %ctx.request_id.as_str(),
                                 idle_secs = idle_timeout.as_secs(),
@@ -245,6 +288,9 @@ impl ProxyHttp for CommandCodeProxy {
                 if !client_gone {
                     session.write_response_body(None, true).await?;
                 }
+                self.metrics.inc_chunks(chunks);
+                self.metrics.inc_bytes_out(bytes_out);
+                self.metrics.stream_finished();
 
                 tracing::info!(
                     request_id = %ctx.request_id.as_str(),
@@ -255,6 +301,13 @@ impl ProxyHttp for CommandCodeProxy {
                 Ok(true)
             }
             Err(e) => {
+                self.metrics.inc_error();
+                if matches!(
+                    e,
+                    proxy_core::error::UpstreamError::Timeout { .. }
+                ) {
+                    self.metrics.inc_upstream_timeout();
+                }
                 tracing::error!(error = %e, "upstream error");
                 let status = match &e {
                     proxy_core::error::UpstreamError::ConnectionRefused { .. } => 502,
@@ -330,6 +383,12 @@ impl CommandCodeProxy {
         self.send_json(session, 200, &response).await
     }
 
+    async fn handle_metrics(&self, session: &mut Session) -> PingoraResult<()> {
+        let body = self.metrics.render();
+        self.send_text(session, 200, "text/plain; version=0.0.4", &body)
+            .await
+    }
+
     /// Send a JSON response — serializes directly to bytes (no double serialization).
     async fn send_json(
         &self,
@@ -351,5 +410,58 @@ impl CommandCodeProxy {
             .map_err(|e| Error::because(ErrorType::InternalError, "json serialize", e))?;
         session.write_response_body(Some(Bytes::from(bytes)), true).await?;
         Ok(())
+    }
+
+    /// Send a plain-text response.
+    async fn send_text(
+        &self,
+        session: &mut Session,
+        status: u16,
+        content_type: &str,
+        body: &str,
+    ) -> PingoraResult<()> {
+        let mut resp = pingora_http::ResponseHeader::build(status, None)?;
+        resp.insert_header("content-type", content_type)?;
+        session.write_response_header(Box::new(resp), false).await?;
+        session
+            .write_response_body(Some(Bytes::from(body.as_bytes().to_vec())), true)
+            .await?;
+        Ok(())
+    }
+}
+
+/// Constant-time string comparison. On length mismatch this still leaks the
+/// length, which is inherent to fixed-length bearer-token checks.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_constant_time_eq_matches() {
+        assert!(constant_time_eq(b"secret-token", b"secret-token"));
+    }
+
+    #[test]
+    fn test_constant_time_eq_mismatch() {
+        assert!(!constant_time_eq(b"secret-token", b"secret-tokee"));
+        assert!(!constant_time_eq(b"secret-token", b"secret-tokenX"));
+        assert!(!constant_time_eq(b"secret-token", b""));
+        assert!(!constant_time_eq(b"", b"secret-token"));
+    }
+
+    #[test]
+    fn test_constant_time_eq_empty() {
+        assert!(constant_time_eq(b"", b""));
     }
 }

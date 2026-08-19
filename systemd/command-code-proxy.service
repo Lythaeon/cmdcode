@@ -31,12 +31,16 @@
 [Unit]
 Description=Command Code OpenAI-compatible translation proxy
 After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 ExecStart=/home/ac/.local/bin/command-code-proxy
 Restart=on-failure
 RestartSec=3
+# Stop restart loops: at most 5 restarts in a 10s window.
+StartLimitIntervalSec=10
+StartLimitBurst=5
 Environment=RUST_LOG=info
 
 [Install]

@@ -19,6 +19,12 @@ pub struct ProxyConfig {
     pub log_level: String,
     pub max_body_size: usize,
     pub stream_idle_timeout_secs: u64,
+    pub log_file: Option<PathBuf>,
+    pub log_max_bytes: u64,
+    pub log_keep: usize,
+    pub tls_cert: Option<PathBuf>,
+    pub tls_key: Option<PathBuf>,
+    pub incoming_token: Option<String>,
 }
 
 impl ProxyConfig {
@@ -88,6 +94,36 @@ impl ProxyConfig {
             .parse()
             .unwrap_or(180);
 
+        let log_file = env::var("COMMAND_CODE_PROXY_LOG_FILE")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from);
+
+        let log_max_bytes = env::var("COMMAND_CODE_PROXY_LOG_MAX_BYTES")
+            .unwrap_or_else(|_| "52428800".to_string())  // 50MB default
+            .parse()
+            .unwrap_or(50 * 1024 * 1024);
+
+        let log_keep = env::var("COMMAND_CODE_PROXY_LOG_KEEP")
+            .unwrap_or_else(|_| "5".to_string())
+            .parse()
+            .unwrap_or(5)
+            .max(1);
+
+        let tls_cert = env::var("COMMAND_CODE_PROXY_TLS_CERT")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from);
+
+        let tls_key = env::var("COMMAND_CODE_PROXY_TLS_KEY")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from);
+
+        let incoming_token = env::var("COMMAND_CODE_PROXY_INCOMING_TOKEN")
+            .ok()
+            .filter(|s| !s.trim().is_empty());
+
         Ok(Self {
             listen_addr,
             upstream_url,
@@ -102,6 +138,12 @@ impl ProxyConfig {
             log_level,
             max_body_size,
             stream_idle_timeout_secs,
+            log_file,
+            log_max_bytes,
+            log_keep,
+            tls_cert,
+            tls_key,
+            incoming_token,
         })
     }
 }

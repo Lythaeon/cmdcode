@@ -9,6 +9,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Semaphore};
 
+use crate::metrics::Metrics;
+
 pub enum UpstreamResponse {
     Json(serde_json::Value),
     Sse { rx: mpsc::Receiver<Result<String, String>> },
@@ -19,11 +21,12 @@ pub struct UpstreamClient {
     pub http: reqwest::Client,
     pub config: Arc<ProxyConfig>,
     pub auth: Arc<AuthManager>,
+    pub metrics: Arc<Metrics>,
     pub semaphore: Option<Semaphore>,
 }
 
 impl UpstreamClient {
-    pub fn new(config: Arc<ProxyConfig>, auth: Arc<AuthManager>) -> Self {
+    pub fn new(config: Arc<ProxyConfig>, auth: Arc<AuthManager>, metrics: Arc<Metrics>) -> Self {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(config.upstream_timeout_secs))
             .pool_max_idle_per_host(32)
@@ -36,7 +39,7 @@ impl UpstreamClient {
             .checked_add(1)
             .map(Semaphore::new);
 
-        Self { http, config, auth, semaphore }
+        Self { http, config, auth, metrics, semaphore }
     }
 
     pub async fn forward_request(
@@ -135,6 +138,7 @@ impl UpstreamClient {
                                         last_err = Some(upstream_err);
                                         let backoff = Duration::from_millis(100 * 2u64.pow(attempt));
                                         tokio::time::sleep(backoff).await;
+                                        self.metrics.inc_retries();
                                         continue;
                                     }
                                     return Err(upstream_err);
@@ -146,6 +150,7 @@ impl UpstreamClient {
                             last_err = Some(upstream_err);
                             let backoff = Duration::from_millis(100 * 2u64.pow(attempt));
                             tokio::time::sleep(backoff).await;
+                            self.metrics.inc_retries();
                             continue;
                         }
                         return Err(upstream_err);
@@ -268,6 +273,7 @@ impl UpstreamClient {
                         last_err = Some(upstream_err);
                         let backoff = Duration::from_millis(100 * 2u64.pow(attempt));
                         tokio::time::sleep(backoff).await;
+                        self.metrics.inc_retries();
                         continue;
                     }
                     return Err(upstream_err);

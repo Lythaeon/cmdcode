@@ -1,4 +1,6 @@
 pub mod handler;
+pub mod logging;
+pub mod metrics;
 pub mod upstream;
 
 use pingora_core::server::Server;
@@ -6,6 +8,7 @@ use proxy_core::auth::AuthManager;
 use proxy_core::config::ProxyConfig;
 use std::sync::Arc;
 
+use crate::metrics::Metrics;
 use crate::upstream::UpstreamClient;
 
 pub struct ProxyService {
@@ -26,16 +29,36 @@ impl ProxyService {
         server.bootstrap();
 
         let listen_addr = self.config.listen_addr.clone();
-        let upstream_client = Arc::new(UpstreamClient::new(self.config.clone(), self.auth.clone()));
+        let tls_cert = self.config.tls_cert.as_ref().map(|p| p.display().to_string());
+        let tls_key = self.config.tls_key.as_ref().map(|p| p.display().to_string());
+        let metrics = Arc::new(Metrics::new());
+        let upstream_client = Arc::new(UpstreamClient::new(
+            self.config.clone(),
+            self.auth.clone(),
+            metrics.clone(),
+        ));
 
         let ctx = handler::CommandCodeProxy {
             config: self.config,
             auth: self.auth,
             upstream_client,
+            metrics,
         };
 
         let mut my_proxy = handler::create_http_proxy_service(&server.configuration, ctx);
-        my_proxy.add_tcp(&listen_addr);
+
+        match (tls_cert, tls_key) {
+            (Some(cert), Some(key)) => {
+                my_proxy.add_tls(&listen_addr, &cert, &key)?;
+            }
+            (None, None) => {
+                my_proxy.add_tcp(&listen_addr);
+            }
+            _ => {
+                return Err("both COMMAND_CODE_PROXY_TLS_CERT and COMMAND_CODE_PROXY_TLS_KEY must be set together".into());
+            }
+        }
+
         server.add_service(my_proxy);
 
         server.run_forever();
@@ -115,6 +138,12 @@ mod tests {
             log_level: "info".into(),
             max_body_size: 10 * 1024 * 1024,
             stream_idle_timeout_secs: 180,
+            log_file: None,
+            log_max_bytes: 50 * 1024 * 1024,
+            log_keep: 5,
+            tls_cert: None,
+            tls_key: None,
+            incoming_token: None,
         };
         let auth = AuthManager::new(config.auth_dir.clone(), 30);
         let _service = ProxyService::new(config, auth);

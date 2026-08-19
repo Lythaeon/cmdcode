@@ -57,7 +57,41 @@ Environment variables:
 | `COMMAND_CODE_PROXY_DEFAULT` | `xiaomi/mimo-v2.5` | Default model |
 | `COMMAND_CODE_PROXY_MODELS` | (unset) | Comma-separated model allowlist |
 | `COMMAND_CODE_PROXY_MAX_REQS` | `0` | Max concurrent requests (0=unlimited) |
+| `COMMAND_CODE_PROXY_LOG_FILE` | (unset) | Write logs to this file with size-based rotation |
+| `COMMAND_CODE_PROXY_LOG_MAX_BYTES` | `52428800` | Rotate the log after this many bytes (50MB) |
+| `COMMAND_CODE_PROXY_LOG_KEEP` | `5` | Keep this many rotated log backups |
+| `COMMAND_CODE_PROXY_INCOMING_TOKEN` | (unset) | Require `Authorization: Bearer <token>` on API routes |
+| `COMMAND_CODE_PROXY_TLS_CERT` | (unset) | Path to a TLS certificate (enables HTTPS; needs KEY too) |
+| `COMMAND_CODE_PROXY_TLS_KEY` | (unset) | Path to the matching TLS private key |
 | `COMMAND_CODE_LOCAL` | (unset) | Set `1` to use `localhost:9090` |
+
+`/metrics` and `/health` are always served unauthenticated for monitors and
+scrapers. When `COMMAND_CODE_PROXY_INCOMING_TOKEN` is set, every other route
+(chat completions, models) requires that token as a bearer header.
+
+## Supervision, log rotation, and soak
+
+The `scripts/` directory ships three helpers:
+
+- `scripts/supervise.sh` — restarts the proxy on crash with exponential
+  backoff (1s to 30s cap). A clean exit (0) stops the supervisor; SIGTERM/SIGINT
+  forward to the child and stop cleanly. Single-instance via `flock`.
+- `scripts/install-supervisor.sh` — installs a `@reboot` cron entry for the
+  supervisor and starts it now. Safe to re-run.
+- `scripts/soak.sh` — long-duration memory/health soak. Every
+  `SOAK_SAMPLE_SECS` (default 300) it checks `/health`, issues one streaming
+  chat request, and samples the proxy's RSS, failing if RSS grows more than
+  `SOAK_RSS_GROWTH_MB` (default 200MB) above baseline or a request fails.
+  Configure with `SOAK_HOURS` (default 24).
+
+```bash
+scripts/install-supervisor.sh        # start now + survive reboot
+SOAK_HOURS=8 scripts/soak.sh         # run an 8-hour soak
+```
+
+For TLS, set `COMMAND_CODE_PROXY_TLS_CERT` and `COMMAND_CODE_PROXY_TLS_KEY`
+to a PEM certificate and key pair. Both must be set together; the proxy then
+serves HTTPS on the configured listen address.
 
 ## Run with makefile.toml
 

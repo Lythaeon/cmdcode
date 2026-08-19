@@ -116,6 +116,12 @@ model_list:
 | `COMMAND_CODE_PROXY_CORS` | (unset) | CORS origin header |
 | `COMMAND_CODE_PROXY_DEFAULT` | `xiaomi/mimo-v2.5` | Default model |
 | `COMMAND_CODE_PROXY_MODELS` | (unset) | Comma-separated model allowlist |
+| `COMMAND_CODE_PROXY_LOG_FILE` | (unset) | Log file with size-based rotation |
+| `COMMAND_CODE_PROXY_LOG_MAX_BYTES` | `52428800` | Rotate after this many bytes |
+| `COMMAND_CODE_PROXY_LOG_KEEP` | `5` | Rotated log backups to keep |
+| `COMMAND_CODE_PROXY_INCOMING_TOKEN` | (unset) | Require bearer token on API routes |
+| `COMMAND_CODE_PROXY_TLS_CERT` | (unset) | TLS cert path (with KEY enables HTTPS) |
+| `COMMAND_CODE_PROXY_TLS_KEY` | (unset) | TLS key path |
 
 ## Endpoints
 
@@ -123,7 +129,11 @@ model_list:
 |--------|------|-------------|
 | `GET` | `/v1/models` | List available models |
 | `GET` | `/health` | Health check (status, version, upstream) |
+| `GET` | `/metrics` | Prometheus-formatted metrics |
 | `POST` | `/v1/chat/completions` | Chat completion (stream + non-stream) |
+
+See `docs/setup.md` for supervision (`scripts/supervise.sh`), log rotation,
+and soak (`scripts/soak.sh`) tooling.
 
 ## Documentation
 
