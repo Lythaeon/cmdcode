@@ -333,9 +333,14 @@ impl UpstreamClient {
                                                 "error" => {
                                                     let msg = evt.error.and_then(|e| e.message)
                                                         .unwrap_or_else(|| "stream error".into());
-                                                    serde_json::json!({
+                                                    let chunk = serde_json::json!({
                                                         "error": {"message": msg, "type": "upstream_error"}
-                                                    })
+                                                    });
+                                                    if tx.send(Ok(format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap_or_default()))).await.is_err() {
+                                                        return;
+                                                    }
+                                                    let _ = tx.send(Ok("data: [DONE]\n\n".to_string())).await;
+                                                    return;
                                                 }
                                                 _ => continue,
                                             };
@@ -363,7 +368,9 @@ impl UpstreamClient {
                         UpstreamError::Io(std::io::Error::other(e.to_string()))
                     };
 
-                    if attempt + 1 < max_attempts {
+                    // Retry only on connect failures — timeouts are not retried
+                    // (a hung upstream would otherwise multiply the wait by attempts).
+                    if e.is_connect() && attempt + 1 < max_attempts {
                         last_err = Some(upstream_err);
                         let backoff = Duration::from_millis(100 * 2u64.pow(attempt));
                         tokio::time::sleep(backoff).await;

@@ -172,6 +172,15 @@ impl ProxyHttp for CommandCodeProxy {
             }
         }
 
+        tracing::info!(
+            request_id = %ctx.request_id.as_str(),
+            model = model.as_str(),
+            body_bytes = body_bytes.len(),
+            messages = body.messages.len(),
+            stream = body.stream.unwrap_or(false),
+            "request received"
+        );
+
         // Forward to upstream
         let start = Instant::now();
         let result = self.upstream_client.forward_request(&model, &body, effort).await;
@@ -189,6 +198,7 @@ impl ProxyHttp for CommandCodeProxy {
             Ok(upstream::UpstreamResponse::Sse { mut rx }) => {
                 tracing::info!(
                     request_id = %ctx.request_id.as_str(),
+                    elapsed_ms = start.elapsed().as_millis() as u64,
                     "starting stream"
                 );
 
@@ -198,23 +208,43 @@ impl ProxyHttp for CommandCodeProxy {
                 resp.insert_header("connection", "keep-alive")?;
                 session.write_response_header(Box::new(resp), false).await?;
 
+                let idle_timeout = std::time::Duration::from_secs(self.config.stream_idle_timeout_secs);
                 let mut chunks = 0u32;
-                while let Some(chunk) = rx.recv().await {
-                    match chunk {
-                        Ok(line) => {
-                            session
-                                .write_response_body(Some(Bytes::from(line)), false)
-                                .await?;
+                let mut client_gone = false;
+                loop {
+                    let recv = tokio::time::timeout(idle_timeout, rx.recv()).await;
+                    match recv {
+                        Ok(Some(Ok(line))) => {
+                            if let Err(e) = session.write_response_body(Some(Bytes::from(line)), false).await {
+                                if is_client_disconnect(&e) {
+                                    tracing::warn!(request_id = %ctx.request_id.as_str(), "client disconnected; aborting stream");
+                                    client_gone = true;
+                                } else {
+                                    return Err(e);
+                                }
+                                break;
+                            }
                             chunks += 1;
                         }
-                        Err(e) => {
-                            tracing::error!(error = %e, "stream error");
+                        Ok(Some(Err(e))) => {
+                            tracing::error!(request_id = %ctx.request_id.as_str(), error = %e, "stream error");
+                            break;
+                        }
+                        Ok(None) => break,
+                        Err(_) => {
+                            tracing::error!(
+                                request_id = %ctx.request_id.as_str(),
+                                idle_secs = idle_timeout.as_secs(),
+                                "stream idle timeout; aborting"
+                            );
                             break;
                         }
                     }
                 }
 
-                session.write_response_body(None, true).await?;
+                if !client_gone {
+                    session.write_response_body(None, true).await?;
+                }
 
                 tracing::info!(
                     request_id = %ctx.request_id.as_str(),
@@ -244,6 +274,18 @@ impl ProxyHttp for CommandCodeProxy {
             }
         }
     }
+}
+
+fn is_client_disconnect(e: &pingora_error::Error) -> bool {
+    let msg = e.to_string();
+    msg.contains("Broken pipe")
+        || msg.contains("broken pipe")
+        || msg.contains("Connection reset")
+        || msg.contains("connection reset")
+        || msg.contains("Connection aborted")
+        || msg.contains("connection aborted")
+        || msg.contains("OperationCanceled")
+        || msg.contains("operation was canceled")
 }
 
 impl CommandCodeProxy {

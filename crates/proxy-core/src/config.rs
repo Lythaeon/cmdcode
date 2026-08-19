@@ -18,6 +18,7 @@ pub struct ProxyConfig {
     pub auth_cache_ttl_secs: u64,
     pub log_level: String,
     pub max_body_size: usize,
+    pub stream_idle_timeout_secs: u64,
 }
 
 impl ProxyConfig {
@@ -82,6 +83,11 @@ impl ProxyConfig {
             .parse()
             .unwrap_or(10 * 1024 * 1024);
 
+        let stream_idle_timeout_secs = env::var("COMMAND_CODE_PROXY_STREAM_IDLE_TIMEOUT")
+            .unwrap_or_else(|_| "180".to_string())
+            .parse()
+            .unwrap_or(180);
+
         Ok(Self {
             listen_addr,
             upstream_url,
@@ -95,6 +101,7 @@ impl ProxyConfig {
             auth_cache_ttl_secs,
             log_level,
             max_body_size,
+            stream_idle_timeout_secs,
         })
     }
 }

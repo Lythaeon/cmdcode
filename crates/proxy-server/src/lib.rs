@@ -114,6 +114,7 @@ mod tests {
             auth_cache_ttl_secs: 30,
             log_level: "info".into(),
             max_body_size: 10 * 1024 * 1024,
+            stream_idle_timeout_secs: 180,
         };
         let auth = AuthManager::new(config.auth_dir.clone(), 30);
         let _service = ProxyService::new(config, auth);
