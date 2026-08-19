@@ -92,11 +92,28 @@ fn parse_context_window(s: &str) -> ContextWindow {
     ContextWindow::new(0)
 }
 
-/// Get the model catalog, parsed from CLI's bundled models.md.
-/// Returns a static reference after first call.
+/// Get the model catalog.
+/// Priority: COMMAND_CODE_PROXY_MODELS_CATALOG env var (path to models.md) > CLI auto-discovery > empty.
 pub fn get_model_catalog() -> &'static HashMap<ModelId, ModelMeta> {
     static CATALOG: OnceLock<HashMap<ModelId, ModelMeta>> = OnceLock::new();
     CATALOG.get_or_init(|| {
+        // 1. Try env var pointing to a models.md file
+        if let Ok(path_str) = std::env::var("COMMAND_CODE_PROXY_MODELS_CATALOG") {
+            let path = PathBuf::from(&path_str);
+            if path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    let catalog = parse_models_md(&content);
+                    eprintln!(
+                        "[command-code-proxy] loaded {} models from {}",
+                        catalog.len(),
+                        path.display()
+                    );
+                    return catalog;
+                }
+            }
+        }
+
+        // 2. Try CLI auto-discovery (single-tenant only)
         if let Some(path) = find_models_md() {
             if let Ok(content) = std::fs::read_to_string(&path) {
                 let catalog = parse_models_md(&content);
@@ -108,32 +125,15 @@ pub fn get_model_catalog() -> &'static HashMap<ModelId, ModelMeta> {
                 return catalog;
             }
         }
+
+        // 3. Empty catalog — proxy still works, just /v1/models returns empty
+        eprintln!("[command-code-proxy] no models found (set COMMAND_CODE_PROXY_MODELS_CATALOG or install command-code CLI)");
         HashMap::new()
     })
 }
 
+/// Try to find the CLI's bundled models.md (single-tenant only).
 fn find_models_md() -> Option<PathBuf> {
-    // Try node resolution first
-    if let Ok(output) = std::process::Command::new("node")
-        .args([
-            "-e",
-            "console.log(require.resolve('command-code/package.json'))",
-        ])
-        .output()
-    {
-        if output.status.success() {
-            let pkg_json = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let base = PathBuf::from(&pkg_json)
-                .parent()?
-                .to_path_buf();
-            let candidate = base.join("dist/bundled/command-code-knowledge/reference/models.md");
-            if candidate.exists() {
-                return Some(candidate);
-            }
-        }
-    }
-
-    // Try common locations
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let candidates = [
         home.join(".linuxbrew/lib/node_modules/command-code/dist/bundled/command-code-knowledge/reference/models.md"),
