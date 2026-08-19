@@ -1,11 +1,27 @@
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use tokio::net::TcpListener;
+
+type MockBody = http_body_util::combinators::BoxBody<bytes::Bytes, std::io::Error>;
+type MockServiceResult = hyper::Result<hyper::Response<MockBody>>;
+type MockServiceFuture = std::pin::Pin<Box<dyn std::future::Future<Output = MockServiceResult> + Send>>;
 
 /// Mock upstream that returns configurable NDJSON responses.
 struct MockUpstream {
     events: Vec<serde_json::Value>,
     status: u16,
     delay_ms: u64,
+    /// Per-request status codes, consumed in order across connections
+    /// (used to exercise proxy retry logic). Falls back to `status` when
+    /// exhausted.
+    status_sequence: Option<Arc<Vec<u16>>>,
+    /// Delay between streamed chunks (multi-chunk trickle).
+    chunk_gap_ms: u64,
+    /// Abort the connection after this many chunks have been sent.
+    reset_after_chunks: Option<usize>,
+    /// Omit the trailing newline on the final event (truncated line).
+    no_final_newline: bool,
 }
 
 impl MockUpstream {
@@ -26,6 +42,10 @@ impl MockUpstream {
             ],
             status: 200,
             delay_ms: 0,
+            status_sequence: None,
+            chunk_gap_ms: 0,
+            reset_after_chunks: None,
+            no_final_newline: false,
         }
     }
 
@@ -35,16 +55,53 @@ impl MockUpstream {
         let events = self.events;
         let status = self.status;
         let delay = self.delay_ms;
+        let status_sequence = self.status_sequence;
+        let chunk_gap = self.chunk_gap_ms;
+        let reset_after = self.reset_after_chunks;
+        let no_final_newline = self.no_final_newline;
+        let counter = Arc::new(AtomicUsize::new(0));
 
         tokio::spawn(async move {
             loop {
                 let (stream, _) = listener.accept().await.unwrap();
                 let events = events.clone();
+                let status_sequence = status_sequence.clone();
+                let counter = counter.clone();
+                let reset_after = reset_after;
+                let no_final_newline = no_final_newline;
                 tokio::spawn(async move {
+                    if let Some(n) = reset_after {
+                        // Raw TCP handler: write the response head + first `n`
+                        // events as chunked encoding, then drop the connection
+                        // (FIN) without the terminating chunk. This mirrors a
+                        // real upstream dying mid-stream: the client receives
+                        // the head and partial body, then EOF.
+                        use tokio::io::AsyncWriteExt;
+                        let mut stream = stream;
+                        let mut buf = [0u8; 8192];
+                        let _ = stream.readable().await;
+                        let _ = stream.try_read(&mut buf);
+                        let head = "HTTP/1.1 200 OK\r\ncontent-type: application/x-ndjson\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n";
+                        if stream.write_all(head.as_bytes()).await.is_ok() {
+                            for evt in events.iter().take(n) {
+                                let mut line = serde_json::to_string(evt).unwrap();
+                                line.push('\n');
+                                let frame = format!("{:x}\r\n{}\r\n", line.len(), line);
+                                if stream.write_all(frame.as_bytes()).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                        // No terminating 0-chunk: connection drops, client sees EOF.
+                        return;
+                    }
                     let io = hyper_util::rt::TokioIo::new(stream);
-                let service = hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
+                let service = hyper::service::service_fn(
+                    move |req: hyper::Request<hyper::body::Incoming>| -> MockServiceFuture {
                     let events = events.clone();
-                    async move {
+                    let status_sequence = status_sequence.clone();
+                    let counter = counter.clone();
+                    Box::pin(async move {
                         // Consume request body
                         use http_body_util::BodyExt;
                         let _ = req.into_body().collect().await;
@@ -53,35 +110,69 @@ impl MockUpstream {
                                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
                             }
 
-                            if status != 200 {
+                            let req_status = match &status_sequence {
+                                Some(seq) => {
+                                    let idx = counter.fetch_add(1, Ordering::SeqCst);
+                                    seq[idx.min(seq.len() - 1)]
+                                }
+                                None => status,
+                            };
+
+                            if req_status != 200 {
                                 let body = r#"{"error":{"message":"upstream error"}}"#;
-                                let mut resp = hyper::Response::new(http_body_util::Full::new(
-                                    bytes::Bytes::from(body),
-                                ));
-                                *resp.status_mut() = hyper::StatusCode::from_u16(status).unwrap();
+                                let stream = futures::stream::once(async move {
+                                    Ok::<_, std::io::Error>(hyper::body::Frame::data(
+                                        bytes::Bytes::from(body),
+                                    ))
+                                });
+                                let mut resp = hyper::Response::new(
+                                    http_body_util::StreamBody::new(stream).boxed(),
+                                );
+                                *resp.status_mut() = hyper::StatusCode::from_u16(req_status).unwrap();
                                 resp.headers_mut().insert("content-type", "application/json".parse().unwrap());
                                 resp.headers_mut().insert("connection", "close".parse().unwrap());
-                                return Ok::<_, hyper::Error>(resp);
+                                return Ok(resp);
                             }
 
                             if events.is_empty() {
-                                return Ok::<_, hyper::Error>(hyper::Response::new(
-                                    http_body_util::Full::new(bytes::Bytes::new()),
+                                let stream = futures::stream::once(async move {
+                                    Ok::<_, std::io::Error>(hyper::body::Frame::data(
+                                        bytes::Bytes::new(),
+                                    ))
+                                });
+                                return Ok(hyper::Response::new(
+                                    http_body_util::StreamBody::new(stream).boxed(),
                                 ));
                             }
 
-                            let mut body = String::new();
-                            for event in &events {
-                                body.push_str(&serde_json::to_string(event).unwrap());
-                                body.push('\n');
-                            }
+                            let frame_stream = futures::stream::unfold(
+                                (events.clone(), 0usize),
+                                move |(evts, i)| async move {
+                                    if i >= evts.len() {
+                                        return None;
+                                    }
+                                    if chunk_gap > 0 && i > 0 {
+                                        tokio::time::sleep(std::time::Duration::from_millis(chunk_gap)).await;
+                                    }
+                                    let mut line = serde_json::to_string(&evts[i]).unwrap();
+                                    if !(no_final_newline && i + 1 == evts.len()) {
+                                        line.push('\n');
+                                    }
+                                    Some((
+                                        Ok::<_, std::io::Error>(hyper::body::Frame::data(
+                                            bytes::Bytes::from(line),
+                                        )),
+                                        (evts, i + 1),
+                                    ))
+                                },
+                            );
 
-                            let mut resp = hyper::Response::new(http_body_util::Full::new(
-                                bytes::Bytes::from(body),
-                            ));
+                            let mut resp = hyper::Response::new(
+                                http_body_util::StreamBody::new(frame_stream).boxed(),
+                            );
                             resp.headers_mut().insert("content-type", "application/x-ndjson".parse().unwrap());
                             Ok(resp)
-                        }
+                        })
                     });
 
                     hyper::server::conn::http1::Builder::new()
@@ -246,7 +337,7 @@ async fn test_e2e_reasoning_effort_parsing() {
 
 #[tokio::test]
 async fn test_chaos_empty_upstream() {
-    let addr = MockUpstream { events: vec![], status: 200, delay_ms: 0 }.start().await;
+    let addr = MockUpstream { events: vec![], status: 200, delay_ms: 0, ..MockUpstream::normal() }.start().await;
     let (status, _) = proxy_request(addr, "/alpha/generate", "POST", Some(r#"{"test":true}"#)).await;
     assert_eq!(status, 200);
 }
@@ -332,6 +423,7 @@ async fn test_chaos_duplicate_finish_events() {
         ],
         status: 200,
         delay_ms: 0,
+        ..MockUpstream::normal()
     };
     let addr = mock.start().await;
     let (status, _) = proxy_request(addr, "/alpha/generate", "POST", Some(r#"{"test":true}"#)).await;
@@ -352,6 +444,7 @@ async fn test_chaos_huge_payload() {
         ],
         status: 200,
         delay_ms: 0,
+        ..MockUpstream::normal()
     };
     let addr = mock.start().await;
     let (status, body) = proxy_request(addr, "/alpha/generate", "POST", Some(r#"{"test":true}"#)).await;
@@ -371,7 +464,7 @@ async fn test_chaos_many_chunks() {
         "totalUsage": {"inputTokens": 10, "outputTokens": 500, "inputTokenDetails": {}}
     }));
 
-    let mock = MockUpstream { events, status: 200, delay_ms: 0 };
+    let mock = MockUpstream { events, status: 200, delay_ms: 0, ..MockUpstream::normal() };
     let addr = mock.start().await;
     let (status, body) = proxy_request(addr, "/alpha/generate", "POST", Some(r#"{"test":true}"#)).await;
     assert_eq!(status, 200);
@@ -694,4 +787,300 @@ async fn test_benchmark_through_proxy_vs_direct() {
     // Proxy overhead must stay small on warm loopback (generous bound to avoid flakiness).
     assert!(pp50 < dp50 + 25.0, "proxy p50 overhead too high: {:.3}ms vs direct {:.3}ms", pp50, dp50);
     assert!(pp99 < dp99 + 50.0, "proxy p99 overhead too high: {:.3}ms vs direct {:.3}ms", pp99, dp99);
+}
+
+// ============================================================
+// Through-proxy chaos tests: REAL Pingora proxy + hostile upstreams
+// ============================================================
+
+/// Start a real Pingora proxy instance pointing at `mock_addr`.
+/// Returns the proxy base URL (e.g. http://127.0.0.1:PORT).
+async fn start_proxy(mock_addr: SocketAddr, retries: u32, idle_timeout_secs: u64) -> String {
+    let auth_dir = std::env::temp_dir().join(format!(
+        "cc-proxy-chaos-auth-{}-{}",
+        std::process::id(),
+        mock_addr.port()
+    ));
+    std::fs::create_dir_all(&auth_dir).unwrap();
+    std::fs::write(auth_dir.join("auth.json"), r#"{"apiKey":"chaos-key-1234567890"}"#).unwrap();
+    std::fs::write(auth_dir.join("config.json"), r#"{}"#).unwrap();
+
+    let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_port = probe.local_addr().unwrap().port();
+    drop(probe);
+
+    let config = proxy_core::config::ProxyConfig {
+        listen_addr: format!("127.0.0.1:{}", proxy_port),
+        upstream_url: format!("http://{}", mock_addr),
+        default_model: "xiaomi/mimo-v2.5".into(),
+        upstream_timeout_secs: 30,
+        max_retries: retries,
+        max_concurrent: 0,
+        cors_origin: None,
+        model_allowlist: None,
+        auth_dir: auth_dir.clone(),
+        auth_cache_ttl_secs: 60,
+        log_level: "error".into(),
+        max_body_size: 10 * 1024 * 1024,
+        stream_idle_timeout_secs: idle_timeout_secs,
+    };
+    let auth = proxy_core::auth::AuthManager::new(auth_dir, 60);
+
+    std::thread::spawn(move || {
+        let service = proxy_server::ProxyService::new(config, auth);
+        let _ = service.run();
+    });
+
+    let proxy_url = format!("http://127.0.0.1:{}", proxy_port);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap();
+    let mut ready = false;
+    for _ in 0..100 {
+        if let Ok(r) = client.get(format!("{}/health", proxy_url)).send().await {
+            if r.status().is_success() {
+                ready = true;
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(ready, "proxy did not become ready in time");
+    proxy_url
+}
+
+/// Minimal streaming chat request body (passes the upstream validator).
+const CHAT_BODY: &str = r#"{"model":"xiaomi/mimo-v2.5","stream":true,"messages":[{"role":"user","content":"hi"}]}"#;
+
+async fn proxy_chat(proxy_url: &str, body: &str) -> (u16, String) {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap();
+    match client
+        .post(format!("{}/v1/chat/completions", proxy_url))
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer chaos-key-1234567890")
+        .body(body.to_string())
+        .send()
+        .await
+    {
+        Ok(r) => {
+            let status = r.status().as_u16();
+            let body = r.text().await.unwrap_or_default();
+            (status, body)
+        }
+        Err(e) => (0, format!("request error: {}", e)),
+    }
+}
+
+#[tokio::test]
+async fn test_chaos_through_proxy_retry_then_success() {
+    let mock = MockUpstream {
+        status_sequence: Some(Arc::new(vec![503, 200])),
+        ..MockUpstream::normal()
+    };
+    let mock_addr = mock.start().await;
+    let proxy = start_proxy(mock_addr, 2, 180).await;
+
+    let (status, body) = proxy_chat(&proxy, CHAT_BODY).await;
+    assert_eq!(status, 200, "retry-then-success should end at 200, got: {}", body);
+    assert!(body.contains("Hello"));
+    assert!(body.contains("[DONE]"));
+}
+
+#[tokio::test]
+async fn test_chaos_through_proxy_retry_exhaustion() {
+    let mock = MockUpstream {
+        status_sequence: Some(Arc::new(vec![503, 503, 503])),
+        ..MockUpstream::normal()
+    };
+    let mock_addr = mock.start().await;
+    let proxy = start_proxy(mock_addr, 2, 180).await;
+
+    let (status, body) = proxy_chat(&proxy, CHAT_BODY).await;
+    assert_eq!(status, 503, "exhausted retries must surface 503, got: {}", body);
+    assert!(body.contains("upstream error"));
+}
+
+#[tokio::test]
+async fn test_chaos_through_proxy_mid_stream_reset() {
+    let mock = MockUpstream {
+        events: vec![
+            serde_json::json!({"type": "text-delta", "text": "partial"}),
+            serde_json::json!({"type": "text-delta", "text": "never-seen"}),
+        ],
+        reset_after_chunks: Some(1),
+        ..MockUpstream::normal()
+    };
+    let mock_addr = mock.start().await;
+    let proxy = start_proxy(mock_addr, 0, 180).await;
+
+    let (status, body) = proxy_chat(&proxy, CHAT_BODY).await;
+    // The client must receive what arrived before the reset, and never a
+    // clean [DONE].
+    assert_eq!(status, 200);
+    assert!(body.contains("partial"));
+    assert!(!body.contains("never-seen"));
+    assert!(!body.contains("[DONE]"), "aborted stream must not end with [DONE]");
+}
+
+#[tokio::test]
+async fn test_chaos_through_proxy_truncated_final_line() {
+    let mock = MockUpstream {
+        events: vec![
+            serde_json::json!({"type": "text-delta", "text": "Hello"}),
+            serde_json::json!({"type": "finish", "finishReason": "stop", "totalUsage": {"inputTokens": 1, "outputTokens": 1, "inputTokenDetails": {}}}),
+        ],
+        no_final_newline: true,
+        ..MockUpstream::normal()
+    };
+    let mock_addr = mock.start().await;
+    let proxy = start_proxy(mock_addr, 0, 180).await;
+
+    let (status, body) = proxy_chat(&proxy, CHAT_BODY).await;
+    assert_eq!(status, 200);
+    assert!(body.contains("Hello"));
+    assert!(body.contains("[DONE]"), "stream must terminate cleanly after truncated line");
+}
+
+#[tokio::test]
+async fn test_chaos_through_proxy_garbage_stream() {
+    let mock = MockUpstream {
+        events: vec![
+            serde_json::json!("not-an-object"),
+            serde_json::json!({"type": "unknown-event"}),
+            serde_json::json!(42),
+            serde_json::json!({"type": "text-delta", "text": "recovered"}),
+        ],
+        ..MockUpstream::normal()
+    };
+    let mock_addr = mock.start().await;
+    let proxy = start_proxy(mock_addr, 0, 180).await;
+
+    let (status, body) = proxy_chat(&proxy, CHAT_BODY).await;
+    assert_eq!(status, 200);
+    assert!(body.contains("recovered"), "valid events after garbage must flow: {}", body);
+    assert!(body.contains("[DONE]"));
+}
+
+#[tokio::test]
+async fn test_chaos_through_proxy_events_after_finish_forwarded() {
+    let mock = MockUpstream {
+        events: vec![
+            serde_json::json!({"type": "text-delta", "text": "first"}),
+            serde_json::json!({"type": "finish", "finishReason": "stop", "totalUsage": {"inputTokens": 1, "outputTokens": 1, "inputTokenDetails": {}}}),
+            serde_json::json!({"type": "text-delta", "text": "after-finish"}),
+        ],
+        ..MockUpstream::normal()
+    };
+    let mock_addr = mock.start().await;
+    let proxy = start_proxy(mock_addr, 0, 180).await;
+
+    let (status, body) = proxy_chat(&proxy, CHAT_BODY).await;
+    assert_eq!(status, 200);
+    // Current contract: trailing deltas after finish are forwarded as-is.
+    assert!(body.contains("after-finish"), "events after finish must be forwarded: {}", body);
+    assert!(body.contains("[DONE]"));
+}
+
+#[tokio::test]
+async fn test_chaos_through_proxy_error_event_stops_stream() {
+    let mock = MockUpstream {
+        events: vec![
+            serde_json::json!({"type": "text-delta", "text": "before"}),
+            serde_json::json!({"type": "error", "error": {"message": "boom"}}),
+            serde_json::json!({"type": "text-delta", "text": "after-error"}),
+        ],
+        ..MockUpstream::normal()
+    };
+    let mock_addr = mock.start().await;
+    let proxy = start_proxy(mock_addr, 0, 180).await;
+
+    let (status, body) = proxy_chat(&proxy, CHAT_BODY).await;
+    assert_eq!(status, 200);
+    assert!(body.contains("before"));
+    assert!(body.contains("boom"), "error event must be surfaced: {}", body);
+    assert!(body.contains("[DONE]"));
+    assert!(!body.contains("after-error"), "stream must stop at error event: {}", body);
+}
+
+#[tokio::test]
+async fn test_chaos_through_proxy_oversized_body() {
+    let mock_addr = MockUpstream::normal().start().await;
+    let proxy = start_proxy(mock_addr, 0, 180).await;
+
+    let big = format!(r#"{{"model":"x","messages":[],"junk":"{}"}}"#, "y".repeat(11 * 1024 * 1024));
+    let (status, _) = proxy_chat(&proxy, &big).await;
+    assert_eq!(status, 413, "oversized body must be rejected with 413");
+}
+
+#[tokio::test]
+async fn test_chaos_through_proxy_invalid_json_body() {
+    let mock_addr = MockUpstream::normal().start().await;
+    let proxy = start_proxy(mock_addr, 0, 180).await;
+
+    let (status, body) = proxy_chat(&proxy, "this is not json").await;
+    assert_eq!(status, 400, "invalid JSON must be rejected with 400");
+    assert!(body.contains("invalid_request_error") || body.contains("400"));
+}
+
+#[tokio::test]
+async fn test_chaos_through_proxy_upstream_500() {
+    let mock = MockUpstream { status: 500, ..MockUpstream::normal() };
+    let mock_addr = mock.start().await;
+    let proxy = start_proxy(mock_addr, 2, 180).await;
+
+    let (status, body) = proxy_chat(&proxy, CHAT_BODY).await;
+    // 500 is not retryable — must surface immediately.
+    assert_eq!(status, 500);
+    assert!(body.contains("upstream error"));
+}
+
+#[tokio::test]
+async fn test_chaos_through_proxy_trickle_stream() {
+    let mut events = Vec::new();
+    for i in 0..8 {
+        events.push(serde_json::json!({"type": "text-delta", "text": format!("t{}", i)}));
+    }
+    events.push(serde_json::json!({"type": "finish", "finishReason": "stop", "totalUsage": {"inputTokens": 1, "outputTokens": 1, "inputTokenDetails": {}}}));
+    let mock = MockUpstream {
+        events,
+        chunk_gap_ms: 50,
+        ..MockUpstream::normal()
+    };
+    let mock_addr = mock.start().await;
+    let proxy = start_proxy(mock_addr, 0, 180).await;
+
+    let start = std::time::Instant::now();
+    let (status, body) = proxy_chat(&proxy, CHAT_BODY).await;
+    assert_eq!(status, 200);
+    for i in 0..8 {
+        assert!(body.contains(&format!("t{}", i)), "missing chunk t{}", i);
+    }
+    assert!(body.contains("[DONE]"));
+    assert!(start.elapsed() >= std::time::Duration::from_millis(300), "trickle pacing not observed");
+}
+
+#[tokio::test]
+async fn test_chaos_through_proxy_idle_timeout_abort() {
+    let mock = MockUpstream {
+        events: vec![
+            serde_json::json!({"type": "text-delta", "text": "first"}),
+            serde_json::json!({"type": "finish", "finishReason": "stop", "totalUsage": {"inputTokens": 1, "outputTokens": 1, "inputTokenDetails": {}}}),
+        ],
+        chunk_gap_ms: 2500,
+        ..MockUpstream::normal()
+    };
+    let mock_addr = mock.start().await;
+    // 1s idle timeout: the 2.5s gap between chunks must abort the stream.
+    let proxy = start_proxy(mock_addr, 0, 1).await;
+
+    let start = std::time::Instant::now();
+    let (status, body) = proxy_chat(&proxy, CHAT_BODY).await;
+    assert_eq!(status, 200);
+    assert!(body.contains("first"));
+    assert!(!body.contains("[DONE]"), "idle-timeout abort must not emit [DONE]");
+    assert!(start.elapsed() >= std::time::Duration::from_secs(1));
 }

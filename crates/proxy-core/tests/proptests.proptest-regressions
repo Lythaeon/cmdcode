@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc a82033f0989d27e4178261ca6a2db94c9f6e2aa9ed50ddd037cfa325f1889c39 # shrinks to messages = [OpenAiMessage { role: "", content: None, tool_call_id: None, tool_calls: None }]
+cc 24aa7641de9e829a627a339d4daf2627dc6b87d1e0ee3fa63545b48ebce215b4 # shrinks to model_str = ""
+cc ee6c6f08811b73ef85f8b9e761cbe5a2db0ab2109d42dbc7d8f4d480b2f5e3fb # shrinks to model = "", text = "", reasoning = "", input = 0, output = 0, cached = 0
+cc 7f36c1f7cc967bf93df1a74984141ec489710834a88f73ce48e4f21741dc3935 # shrinks to raw = "{\"type\":\"\"}"

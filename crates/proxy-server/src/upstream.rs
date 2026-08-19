@@ -211,7 +211,12 @@ impl UpstreamClient {
                             let mut stream = std::pin::pin!(stream);
                             let created = chrono_now_secs();
                             let completion_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
-                            let mut tool_index: u32 = 0;
+                            let mut state = StreamState {
+                                completion_id: &completion_id,
+                                created,
+                                model: &model_str,
+                                tool_index: 0,
+                            };
 
                             while let Some(chunk_result) = stream.next().await {
                                 match chunk_result {
@@ -222,133 +227,20 @@ impl UpstreamClient {
                                             buffer = buffer[newline_pos + 1..].to_string();
                                             if line.is_empty() { continue; }
 
-                                            let evt = match serde_json::from_str::<UpstreamEvent>(&line) {
-                                                Ok(e) => e,
-                                                Err(_) => continue,
-                                            };
-
-                                            let chunk = match evt.event_type.as_str() {
-                                                "text-delta" => {
-                                                    let text = evt.text.unwrap_or_default();
-                                                    serde_json::json!({
-                                                        "id": completion_id,
-                                                        "object": "chat.completion.chunk",
-                                                        "created": created,
-                                                        "model": model_str,
-                                                        "choices": [{
-                                                            "index": 0,
-                                                            "delta": {"content": text},
-                                                            "finish_reason": serde_json::Value::Null,
-                                                        }]
-                                                    })
-                                                }
-                                                "reasoning-delta" => {
-                                                    let text = evt.text.unwrap_or_default();
-                                                    serde_json::json!({
-                                                        "id": completion_id,
-                                                        "object": "chat.completion.chunk",
-                                                        "created": created,
-                                                        "model": model_str,
-                                                        "choices": [{
-                                                            "index": 0,
-                                                            "delta": {"reasoning_content": text},
-                                                            "finish_reason": serde_json::Value::Null,
-                                                        }]
-                                                    })
-                                                }
-                                                "tool-call" => {
-                                                    let tc_id = evt.tool_call_id.unwrap_or_default();
-                                                    let name = evt.tool_name.unwrap_or_default();
-                                                    let args = evt.input.unwrap_or(serde_json::Value::Null);
-                                                    let args_str = if let Some(s) = args.as_str() {
-                                                        serde_json::from_str::<serde_json::Value>(s)
-                                                            .unwrap_or_else(|_| args.clone())
-                                                    } else {
-                                                        args
-                                                    };
-                                                    let idx = tool_index;
-                                                    tool_index += 1;
-                                                    serde_json::json!({
-                                                        "id": completion_id,
-                                                        "object": "chat.completion.chunk",
-                                                        "created": created,
-                                                        "model": model_str,
-                                                        "choices": [{
-                                                            "index": 0,
-                                                            "delta": {
-                                                                "tool_calls": [{
-                                                                    "index": idx,
-                                                                    "id": tc_id,
-                                                                    "type": "function",
-                                                                    "function": {
-                                                                        "name": name,
-                                                                        "arguments": args_str,
-                                                                    }
-                                                                }]
-                                                            },
-                                                            "finish_reason": serde_json::Value::Null,
-                                                        }]
-                                                    })
-                                                }
-                                                "finish" => {
-                                                    let raw = evt.raw_finish_reason.as_deref()
-                                                        .or(evt.finish_reason.as_deref())
-                                                        .unwrap_or("stop");
-                                                    let fr = match raw {
-                                                        "tool_use" | "tool-calls" | "tool_calls" => "tool_calls",
-                                                        "length" | "max_tokens" => "length",
-                                                        _ => "stop",
-                                                    };
-                                                    let mut usage_obj = serde_json::json!({});
-                                                    if let Some(u) = evt.total_usage {
-                                                        if let Some(d) = u.input_token_details {
-                                                            usage_obj = serde_json::json!({
-                                                                "prompt_tokens": u.input_tokens.unwrap_or(0),
-                                                                "completion_tokens": u.output_tokens.unwrap_or(0),
-                                                                "total_tokens": u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0),
-                                                                "prompt_tokens_details": {
-                                                                    "cached_tokens": d.cache_read_tokens.unwrap_or(0),
-                                                                }
-                                                            });
-                                                        } else {
-                                                            usage_obj = serde_json::json!({
-                                                                "prompt_tokens": u.input_tokens.unwrap_or(0),
-                                                                "completion_tokens": u.output_tokens.unwrap_or(0),
-                                                                "total_tokens": u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0),
-                                                            });
-                                                        }
+                                            match translate_line(&line, &mut state) {
+                                                LineOutcome::Skip => {}
+                                                LineOutcome::Emit(payload) => {
+                                                    if tx.send(Ok(payload)).await.is_err() {
+                                                        return;
                                                     }
-                                                    let mut chunk = serde_json::json!({
-                                                        "id": completion_id,
-                                                        "object": "chat.completion.chunk",
-                                                        "created": created,
-                                                        "model": model_str,
-                                                        "choices": [{
-                                                            "index": 0,
-                                                            "delta": {},
-                                                            "finish_reason": fr,
-                                                        }]
-                                                    });
-                                                    chunk["usage"] = usage_obj;
-                                                    chunk
                                                 }
-                                                "error" => {
-                                                    let msg = evt.error.and_then(|e| e.message)
-                                                        .unwrap_or_else(|| "stream error".into());
-                                                    let chunk = serde_json::json!({
-                                                        "error": {"message": msg, "type": "upstream_error"}
-                                                    });
-                                                    if tx.send(Ok(format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap_or_default()))).await.is_err() {
+                                                LineOutcome::EmitAndStop(payload) => {
+                                                    if tx.send(Ok(payload)).await.is_err() {
                                                         return;
                                                     }
                                                     let _ = tx.send(Ok("data: [DONE]\n\n".to_string())).await;
                                                     return;
                                                 }
-                                                _ => continue,
-                                            };
-
-                                            if tx.send(Ok(format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap_or_default()))).await.is_err() {
-                                                return;
                                             }
                                         }
                                     }
@@ -428,6 +320,158 @@ fn build_config(cwd: &str) -> serde_json::Value {
     })
 }
 
+/// Shared per-stream state for NDJSON -> OpenAI SSE translation.
+pub struct StreamState<'a> {
+    pub completion_id: &'a str,
+    pub created: i64,
+    pub model: &'a str,
+    pub tool_index: u32,
+}
+
+/// Result of translating a single upstream NDJSON line.
+pub enum LineOutcome {
+    /// Line was empty, malformed, or an unknown event type — skip it.
+    Skip,
+    /// Normal chunk payload (already `data: ...` formatted).
+    Emit(String),
+    /// Error chunk payload — send it, then `[DONE]` and terminate the stream.
+    EmitAndStop(String),
+}
+
+/// Translate one upstream NDJSON line into an OpenAI SSE payload.
+///
+/// Pure function (no I/O) so it can be unit-tested and fuzzed directly.
+pub fn translate_line(line: &str, state: &mut StreamState) -> LineOutcome {
+    let line = line.trim();
+    if line.is_empty() {
+        return LineOutcome::Skip;
+    }
+
+    let evt = match serde_json::from_str::<UpstreamEvent>(line) {
+        Ok(e) => e,
+        Err(_) => return LineOutcome::Skip,
+    };
+
+    let chunk = match evt.event_type.as_str() {
+        "text-delta" => {
+            let text = evt.text.unwrap_or_default();
+            serde_json::json!({
+                "id": state.completion_id,
+                "object": "chat.completion.chunk",
+                "created": state.created,
+                "model": state.model,
+                "choices": [{
+                    "index": 0,
+                    "delta": {"content": text},
+                    "finish_reason": serde_json::Value::Null,
+                }]
+            })
+        }
+        "reasoning-delta" => {
+            let text = evt.text.unwrap_or_default();
+            serde_json::json!({
+                "id": state.completion_id,
+                "object": "chat.completion.chunk",
+                "created": state.created,
+                "model": state.model,
+                "choices": [{
+                    "index": 0,
+                    "delta": {"reasoning_content": text},
+                    "finish_reason": serde_json::Value::Null,
+                }]
+            })
+        }
+        "tool-call" => {
+            let tc_id = evt.tool_call_id.unwrap_or_default();
+            let name = evt.tool_name.unwrap_or_default();
+            let args = evt.input.unwrap_or(serde_json::Value::Null);
+            let args_str = match &args {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Null => String::new(),
+                other => serde_json::to_string(other).unwrap_or_default(),
+            };
+            let idx = state.tool_index;
+            state.tool_index += 1;
+            serde_json::json!({
+                "id": state.completion_id,
+                "object": "chat.completion.chunk",
+                "created": state.created,
+                "model": state.model,
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [{
+                            "index": idx,
+                            "id": tc_id,
+                            "type": "function",
+                            "function": {
+                                "name": name,
+                                "arguments": args_str,
+                            }
+                        }]
+                    },
+                    "finish_reason": serde_json::Value::Null,
+                }]
+            })
+        }
+        "finish" => {
+            let raw = evt.raw_finish_reason.as_deref()
+                .or(evt.finish_reason.as_deref())
+                .unwrap_or("stop");
+            let fr = match raw {
+                "tool_use" | "tool-calls" | "tool_calls" => "tool_calls",
+                "length" | "max_tokens" => "length",
+                _ => "stop",
+            };
+            let mut usage_obj = serde_json::json!({});
+            if let Some(u) = evt.total_usage {
+                if let Some(d) = u.input_token_details {
+                    usage_obj = serde_json::json!({
+                        "prompt_tokens": u.input_tokens.unwrap_or(0),
+                        "completion_tokens": u.output_tokens.unwrap_or(0),
+                        "total_tokens": u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0),
+                        "prompt_tokens_details": {
+                            "cached_tokens": d.cache_read_tokens.unwrap_or(0),
+                        }
+                    });
+                } else {
+                    usage_obj = serde_json::json!({
+                        "prompt_tokens": u.input_tokens.unwrap_or(0),
+                        "completion_tokens": u.output_tokens.unwrap_or(0),
+                        "total_tokens": u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0),
+                    });
+                }
+            }
+            let mut chunk = serde_json::json!({
+                "id": state.completion_id,
+                "object": "chat.completion.chunk",
+                "created": state.created,
+                "model": state.model,
+                "choices": [{
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": fr,
+                }]
+            });
+            chunk["usage"] = usage_obj;
+            chunk
+        }
+        "error" => {
+            let msg = evt.error.and_then(|e| e.message)
+                .unwrap_or_else(|| "stream error".into());
+            let chunk = serde_json::json!({
+                "error": {"message": msg, "type": "upstream_error"}
+            });
+            return LineOutcome::EmitAndStop(
+                format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap_or_default()),
+            );
+        }
+        _ => return LineOutcome::Skip,
+    };
+
+    LineOutcome::Emit(format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap_or_default()))
+}
+
 /// Days since 1970-01-01 to civil (year, month, day) — Howard Hinnant's algorithm.
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719468;
@@ -468,4 +512,198 @@ fn extract_system(messages: &[proxy_core::wire_format::OpenAiMessage]) -> Option
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state<'a>(completion_id: &'a str, model: &'a str) -> StreamState<'a> {
+        StreamState {
+            completion_id,
+            created: 12345,
+            model,
+            tool_index: 0,
+        }
+    }
+
+    #[test]
+    fn test_translate_text_delta() {
+        let mut s = state("chatcmpl-1", "m1");
+        match translate_line(r#"{"type":"text-delta","text":"hello"}"#, &mut s) {
+            LineOutcome::Emit(p) => {
+                assert!(p.starts_with("data: "));
+                assert!(p.contains("\"content\":\"hello\""));
+                assert!(p.contains("\"id\":\"chatcmpl-1\""));
+                assert!(p.contains("\"model\":\"m1\""));
+                assert!(p.contains("\"created\":12345"));
+            }
+            _ => panic!("expected Emit"),
+        }
+    }
+
+    #[test]
+    fn test_translate_consistent_completion_id_across_chunks() {
+        let mut s = state("chatcmpl-fixed", "m1");
+        let mut ids = Vec::new();
+        for line in [
+            r#"{"type":"text-delta","text":"a"}"#,
+            r#"{"type":"reasoning-delta","text":"r"}"#,
+            r#"{"type":"tool-call","toolCallId":"tc1","toolName":"t","input":{"x":1}}"#,
+            r#"{"type":"finish","finishReason":"stop","totalUsage":{"inputTokens":1,"outputTokens":1}}"#,
+        ] {
+            match translate_line(line, &mut s) {
+                LineOutcome::Emit(p) | LineOutcome::EmitAndStop(p) => {
+                    let val: serde_json::Value = serde_json::from_str(p.trim_start_matches("data: ").trim()).unwrap();
+                    ids.push(val["id"].as_str().unwrap().to_string());
+                }
+                LineOutcome::Skip => panic!("unexpected skip: {line}"),
+            }
+        }
+        assert_eq!(ids, vec!["chatcmpl-fixed"; 4]);
+    }
+
+    #[test]
+    fn test_translate_tool_call_string_args_stay_string() {
+        let mut s = state("chatcmpl-1", "m1");
+        let line = r#"{"type":"tool-call","toolCallId":"tc1","toolName":"get_weather","input":"{\"city\":\"Berlin\"}"}"#;
+        match translate_line(line, &mut s) {
+            LineOutcome::Emit(p) => {
+                let val: serde_json::Value = serde_json::from_str(p.trim_start_matches("data: ").trim()).unwrap();
+                let args = &val["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"];
+                assert!(args.is_string(), "arguments must be a JSON string on the wire: {args}");
+                assert_eq!(args, r#"{"city":"Berlin"}"#);
+            }
+            _ => panic!("expected Emit"),
+        }
+    }
+
+    #[test]
+    fn test_translate_tool_call_object_args_serialized_to_string() {
+        let mut s = state("chatcmpl-1", "m1");
+        let line = r#"{"type":"tool-call","toolCallId":"tc1","toolName":"todowrite","input":{"todos":[{"content":"x","priority":"high","status":"in_progress"}]}}"#;
+        match translate_line(line, &mut s) {
+            LineOutcome::Emit(p) => {
+                let val: serde_json::Value = serde_json::from_str(p.trim_start_matches("data: ").trim()).unwrap();
+                let args = &val["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"];
+                assert!(args.is_string(), "object args must be serialized to a JSON string: {args}");
+                let reparsed: serde_json::Value = serde_json::from_str(args.as_str().unwrap()).unwrap();
+                assert_eq!(reparsed["todos"][0]["priority"], "high");
+            }
+            _ => panic!("expected Emit"),
+        }
+    }
+
+    #[test]
+    fn test_translate_tool_call_unparseable_args_stays_string() {
+        let mut s = state("chatcmpl-1", "m1");
+        let line = r#"{"type":"tool-call","toolCallId":"tc1","toolName":"t","input":"not json at all"}"#;
+        match translate_line(line, &mut s) {
+            LineOutcome::Emit(p) => {
+                let val: serde_json::Value = serde_json::from_str(p.trim_start_matches("data: ").trim()).unwrap();
+                let args = &val["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"];
+                assert_eq!(args, "not json at all");
+            }
+            _ => panic!("expected Emit"),
+        }
+    }
+
+    #[test]
+    fn test_translate_tool_index_increments() {
+        let mut s = state("chatcmpl-1", "m1");
+        let mut idxs = Vec::new();
+        for line in [
+            r#"{"type":"tool-call","toolCallId":"tc1","toolName":"a","input":{}}"#,
+            r#"{"type":"tool-call","toolCallId":"tc2","toolName":"b","input":{}}"#,
+        ] {
+            match translate_line(line, &mut s) {
+                LineOutcome::Emit(p) => {
+                    let val: serde_json::Value = serde_json::from_str(p.trim_start_matches("data: ").trim()).unwrap();
+                    idxs.push(val["choices"][0]["delta"]["tool_calls"][0]["index"].as_u64().unwrap());
+                }
+                _ => panic!("expected Emit"),
+            }
+        }
+        assert_eq!(idxs, vec![0, 1]);
+    }
+
+    #[test]
+    fn test_translate_finish_maps_reasons() {
+        for (raw, expected) in [
+            ("stop", "stop"),
+            ("tool_use", "tool_calls"),
+            ("tool-calls", "tool_calls"),
+            ("tool_calls", "tool_calls"),
+            ("length", "length"),
+            ("max_tokens", "length"),
+            ("weird", "stop"),
+        ] {
+            let mut s = state("chatcmpl-1", "m1");
+            let line = format!(r#"{{"type":"finish","finishReason":"{raw}","totalUsage":{{"inputTokens":2,"outputTokens":3}}}}"#);
+            match translate_line(&line, &mut s) {
+                LineOutcome::Emit(p) => {
+                    let val: serde_json::Value = serde_json::from_str(p.trim_start_matches("data: ").trim()).unwrap();
+                    assert_eq!(val["choices"][0]["finish_reason"], expected, "for raw={raw}");
+                    assert_eq!(val["usage"]["total_tokens"], 5);
+                }
+                _ => panic!("expected Emit for {raw}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_translate_finish_usage_details() {
+        let mut s = state("chatcmpl-1", "m1");
+        let line = r#"{"type":"finish","finishReason":"stop","totalUsage":{"inputTokens":10,"outputTokens":4,"inputTokenDetails":{"cacheReadTokens":7}}}"#;
+        match translate_line(line, &mut s) {
+            LineOutcome::Emit(p) => {
+                let val: serde_json::Value = serde_json::from_str(p.trim_start_matches("data: ").trim()).unwrap();
+                assert_eq!(val["usage"]["prompt_tokens"], 10);
+                assert_eq!(val["usage"]["completion_tokens"], 4);
+                assert_eq!(val["usage"]["total_tokens"], 14);
+                assert_eq!(val["usage"]["prompt_tokens_details"]["cached_tokens"], 7);
+            }
+            _ => panic!("expected Emit"),
+        }
+    }
+
+    #[test]
+    fn test_translate_error_stops_stream() {
+        let mut s = state("chatcmpl-1", "m1");
+        let line = r#"{"type":"error","error":{"message":"boom"}}"#;
+        match translate_line(line, &mut s) {
+            LineOutcome::EmitAndStop(p) => {
+                assert!(p.contains("\"message\":\"boom\""));
+                assert!(p.contains("\"type\":\"upstream_error\""));
+            }
+            _ => panic!("expected EmitAndStop"),
+        }
+    }
+
+    #[test]
+    fn test_translate_skips_garbage() {
+        let mut s = state("chatcmpl-1", "m1");
+        for line in ["", "   ", "not json", "{\"type\":\"unknown\"}", "{broken", "null", "42"] {
+            match translate_line(line, &mut s) {
+                LineOutcome::Skip => {}
+                _ => panic!("expected Skip for {line:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_translate_never_panics_on_malformed_input() {
+        let mut s = state("chatcmpl-1", "m1");
+        for line in [
+            "\u{0}\u{1}\u{2}",
+            "{\"type\":\"text-delta\"}",
+            "{\"type\":\"tool-call\"}",
+            "{\"type\":\"finish\"}",
+            "{\"type\":\"error\"}",
+            "{\"type\":\"reasoning-delta\",\"text\":null}",
+            "{\"type\":\"finish\",\"totalUsage\":{\"inputTokens\":null}}",
+        ] {
+            let _ = translate_line(line, &mut s);
+        }
+    }
 }
