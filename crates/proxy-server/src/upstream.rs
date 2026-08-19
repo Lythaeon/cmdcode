@@ -210,6 +210,7 @@ impl UpstreamClient {
                             let mut buffer = String::new();
                             let mut stream = std::pin::pin!(stream);
                             let created = chrono_now_secs();
+                            let completion_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
                             let mut tool_index: u32 = 0;
 
                             while let Some(chunk_result) = stream.next().await {
@@ -230,7 +231,7 @@ impl UpstreamClient {
                                                 "text-delta" => {
                                                     let text = evt.text.unwrap_or_default();
                                                     serde_json::json!({
-                                                        "id": format!("chatcmpl-{}", uuid::Uuid::new_v4()),
+                                                        "id": completion_id,
                                                         "object": "chat.completion.chunk",
                                                         "created": created,
                                                         "model": model_str,
@@ -244,7 +245,7 @@ impl UpstreamClient {
                                                 "reasoning-delta" => {
                                                     let text = evt.text.unwrap_or_default();
                                                     serde_json::json!({
-                                                        "id": format!("chatcmpl-{}", uuid::Uuid::new_v4()),
+                                                        "id": completion_id,
                                                         "object": "chat.completion.chunk",
                                                         "created": created,
                                                         "model": model_str,
@@ -259,15 +260,16 @@ impl UpstreamClient {
                                                     let tc_id = evt.tool_call_id.unwrap_or_default();
                                                     let name = evt.tool_name.unwrap_or_default();
                                                     let args = evt.input.unwrap_or(serde_json::Value::Null);
-                                                    let args_str = if args.is_string() {
-                                                        args.as_str().unwrap().to_string()
+                                                    let args_str = if let Some(s) = args.as_str() {
+                                                        serde_json::from_str::<serde_json::Value>(s)
+                                                            .unwrap_or_else(|_| args.clone())
                                                     } else {
-                                                        serde_json::to_string(&args).unwrap_or_default()
+                                                        args
                                                     };
                                                     let idx = tool_index;
                                                     tool_index += 1;
                                                     serde_json::json!({
-                                                        "id": format!("chatcmpl-{}", uuid::Uuid::new_v4()),
+                                                        "id": completion_id,
                                                         "object": "chat.completion.chunk",
                                                         "created": created,
                                                         "model": model_str,
@@ -317,7 +319,7 @@ impl UpstreamClient {
                                                         }
                                                     }
                                                     let mut chunk = serde_json::json!({
-                                                        "id": format!("chatcmpl-{}", uuid::Uuid::new_v4()),
+                                                        "id": completion_id,
                                                         "object": "chat.completion.chunk",
                                                         "created": created,
                                                         "model": model_str,
