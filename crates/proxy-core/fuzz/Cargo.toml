@@ -1,7 +1,6 @@
 [package]
 name = "proxy-core-fuzz"
 version = "0.0.0"
-authors = ["Automatically generated"]
 publish = false
 edition = "2021"
 
@@ -17,19 +16,58 @@ serde_json = "1"
 name = "fuzz_wire_format"
 path = "fuzz_targets/fuzz_wire_format.rs"
 test = false
-doc = false
 bench = false
 
 [[bin]]
 name = "fuzz_auth"
 path = "fuzz_targets/fuzz_auth.rs"
 test = false
-doc = false
 bench = false
 
 [[bin]]
 name = "fuzz_catalog"
 path = "fuzz_targets/fuzz_catalog.rs"
 test = false
-doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_upstream_events"
+path = "fuzz_targets/fuzz_upstream_events.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_auth_data"
+path = "fuzz_targets/fuzz_auth_data.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_model_catalog"
+path = "fuzz_targets/fuzz_model_catalog.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_messages"
+path = "fuzz_targets/fuzz_messages.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_tools"
+path = "fuzz_targets/fuzz_tools.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_request_body"
+path = "fuzz_targets/fuzz_request_body.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_model_effort"
+path = "fuzz_targets/fuzz_model_effort.rs"
+test = false
 bench = false
