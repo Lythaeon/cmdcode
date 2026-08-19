@@ -133,7 +133,7 @@ impl UpstreamClient {
                                     let upstream_err = UpstreamError::HttpError { status, body: err.to_string() };
                                     if is_retryable(status) && attempt + 1 < max_attempts {
                                         last_err = Some(upstream_err);
-                                        let backoff = Duration::from_millis(100 * 2u64.pow(attempt as u32));
+                                        let backoff = Duration::from_millis(100 * 2u64.pow(attempt));
                                         tokio::time::sleep(backoff).await;
                                         continue;
                                     }
@@ -144,7 +144,7 @@ impl UpstreamClient {
                         let upstream_err = UpstreamError::HttpError { status, body: body_text };
                         if is_retryable(status) && attempt + 1 < max_attempts {
                             last_err = Some(upstream_err);
-                            let backoff = Duration::from_millis(100 * 2u64.pow(attempt as u32));
+                            let backoff = Duration::from_millis(100 * 2u64.pow(attempt));
                             tokio::time::sleep(backoff).await;
                             continue;
                         }
@@ -365,7 +365,7 @@ impl UpstreamClient {
 
                     if attempt + 1 < max_attempts {
                         last_err = Some(upstream_err);
-                        let backoff = Duration::from_millis(100 * 2u64.pow(attempt as u32));
+                        let backoff = Duration::from_millis(100 * 2u64.pow(attempt));
                         tokio::time::sleep(backoff).await;
                         continue;
                     }
@@ -379,7 +379,7 @@ impl UpstreamClient {
 }
 
 fn is_retryable(status: u16) -> bool {
-    matches!(status, 502 | 503 | 504)
+    matches!(status, 502..=504)
 }
 
 /// Build the config block the upstream requires (workingDir, date, ...).

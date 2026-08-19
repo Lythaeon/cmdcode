@@ -252,8 +252,8 @@ pub fn wire_messages(messages: &[OpenAiMessage]) -> Vec<CcMessage> {
     for msg in messages {
         match msg.role.as_str() {
             "system" => {
-                let content = extract_text_content(&msg.content);
-                wire.push(CcMessage::System { content });
+                // The upstream only accepts user|assistant|tool in the messages
+                // array; the system prompt goes in params.system instead.
             }
             "user" => {
                 let items = extract_user_content(&msg.content);
@@ -733,12 +733,9 @@ mod tests {
         ];
 
         let wire = wire_messages(&messages);
-        assert_eq!(wire.len(), 2);
+        // System messages are skipped in the array (they go to params.system)
+        assert_eq!(wire.len(), 1);
         match &wire[0] {
-            CcMessage::System { content } => assert_eq!(content, "Be helpful"),
-            _ => panic!("expected system message"),
-        }
-        match &wire[1] {
             CcMessage::User { content } => {
                 assert_eq!(content.len(), 1);
                 match &content[0] {

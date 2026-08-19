@@ -182,16 +182,10 @@ async fn test_e2e_wire_format_translation() {
     ];
 
     let wire = proxy_core::wire_format::wire_messages(&messages);
-    assert_eq!(wire.len(), 2);
+    // System messages are skipped in the array (they go to params.system)
+    assert_eq!(wire.len(), 1);
 
     match &wire[0] {
-        proxy_core::wire_format::CcMessage::System { content } => {
-            assert_eq!(content, "Be helpful");
-        }
-        _ => panic!("expected system message"),
-    }
-
-    match &wire[1] {
         proxy_core::wire_format::CcMessage::User { content } => {
             assert_eq!(content.len(), 1);
             match &content[0] {
