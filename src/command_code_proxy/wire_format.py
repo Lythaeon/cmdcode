@@ -37,7 +37,7 @@ else:
 # Reasoning effort levels supported by the API
 REASONING_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 
-DEFAULT_MODEL = "gpt-5.6-luna"
+DEFAULT_MODEL = "xiaomi/mimo-v2.5"
 
 # --- Model catalog (auto-parsed from CLI bundled models.md) ----------------
 
@@ -202,26 +202,16 @@ def parse_model_and_effort(model_str: str) -> tuple[str, Optional[str]]:
 
 # --- Auth / config helpers ------------------------------------------------
 
-
 def load_auth() -> dict[str, Any]:
-    """Read ~/.commandcode/auth.json (re-read on every call so keys stay fresh)."""
-    auth_file = AUTH_DIR / "auth.json"
-    if not auth_file.exists():
-        raise FileNotFoundError(
-            f"Command Code auth file not found at {auth_file}. "
-            "Run `command-code login` first."
-        )
-    with open(auth_file) as f:
-        return json.load(f)
+    """Read ~/.commandcode/auth.json. Delegates to auth module for caching."""
+    from .auth import get_auth_state
+    return get_auth_state().get_auth()
 
 
 def load_config() -> dict[str, Any]:
-    """Read ~/.commandcode/config.json (re-read on every call)."""
-    config_file = AUTH_DIR / "config.json"
-    if config_file.exists():
-        with open(config_file) as f:
-            return json.load(f)
-    return {}
+    """Read ~/.commandcode/config.json. Delegates to auth module for caching."""
+    from .auth import get_auth_state
+    return get_auth_state().get_config()
 
 
 # --- CLI version detection (cached) ---------------------------------------

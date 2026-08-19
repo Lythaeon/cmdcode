@@ -19,7 +19,7 @@ Env:
   COMMAND_CODE_PROXY_RETRIES     retry count for transient failures (default 2)
   COMMAND_CODE_PROXY_MAX_REQS    max concurrent requests (default 0 = unlimited)
   COMMAND_CODE_PROXY_MODELS      comma-separated allowlist of model IDs (default: all)
-  COMMAND_CODE_PROXY_DEFAULT     default model ID (default: gpt-5.6-luna)
+  COMMAND_CODE_PROXY_DEFAULT     default model ID (default: xiaomi/mimo-v2.5)
   COMMAND_CODE_PROXY_LOG_LEVEL   logging level (default: INFO)
 """
 
@@ -51,6 +51,7 @@ from .wire_format import (
     wire_messages,
     wire_tools,
 )
+from .auth import get_auth_state
 
 PORT = int(os.environ.get("COMMAND_CODE_PROXY_PORT", "18080"))
 HOST = os.environ.get("COMMAND_CODE_PROXY_HOST", "127.0.0.1")
@@ -517,12 +518,14 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             })
             return
         if path == "/health":
+            auth_health = get_auth_state().health_check()
             self._send_json(200, {
                 "status": "ok",
                 "version": get_cli_version(),
                 "upstream": API_BASE,
                 "models": len(get_model_catalog()),
                 "default_model": PROXY_DEFAULT_MODEL,
+                "auth": auth_health,
             })
             return
         self._send_json(404, {"error": {"message": f"Unknown route {self.path}",

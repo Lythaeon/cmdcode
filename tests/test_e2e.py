@@ -40,7 +40,7 @@ class TestModelsEndpoint:
         resp = conn.getresponse()
         data = json.loads(resp.read())
         ids = [m["id"] for m in data["data"]]
-        assert "gpt-5.6-luna" in ids
+        assert "xiaomi/mimo-v2.5" in ids
         assert "gpt-5.6-sol" in ids
         assert "claude-sonnet-5" in ids
 
@@ -85,7 +85,7 @@ class TestChatCompletion:
         host, port = proxy_server
         conn = http.client.HTTPConnection(host, port, timeout=10)
         body = json.dumps({
-            "model": "gpt-5.6-luna",
+            "model": "xiaomi/mimo-v2.5",
             "messages": [{"role": "user", "content": "Hello"}],
             "stream": False,
         })
@@ -110,7 +110,7 @@ class TestChatCompletion:
         host, port = proxy_server
         conn = http.client.HTTPConnection(host, port, timeout=10)
         body = json.dumps({
-            "model": "gpt-5.6-luna",
+            "model": "xiaomi/mimo-v2.5",
             "messages": [{"role": "user", "content": "Stream test"}],
             "stream": True,
         })
@@ -138,7 +138,7 @@ class TestChatCompletion:
         host, port = proxy_server
         conn = http.client.HTTPConnection(host, port, timeout=10)
         body = json.dumps({
-            "model": "gpt-5.6-luna",
+            "model": "xiaomi/mimo-v2.5",
             "messages": [{"role": "user", "content": "test"}],
             "stream": True,
         })
@@ -161,7 +161,7 @@ class TestChatCompletion:
         host, port = proxy_server
         conn = http.client.HTTPConnection(host, port, timeout=10)
         body = json.dumps({
-            "model": "gpt-5.6-luna",
+            "model": "xiaomi/mimo-v2.5",
             "messages": [{"role": "user", "content": "Search test"}],
             "stream": True,
         })
@@ -185,7 +185,7 @@ class TestChatCompletion:
         host, port = proxy_server
         conn = http.client.HTTPConnection(host, port, timeout=10)
         body = json.dumps({
-            "model": "gpt-5.6-luna",
+            "model": "xiaomi/mimo-v2.5",
             "messages": [{"role": "user", "content": "test"}],
             "stream": False,
         })
@@ -209,7 +209,7 @@ class TestChatCompletion:
         host, port = proxy_server
         conn = http.client.HTTPConnection(host, port, timeout=10)
         body = json.dumps({
-            "model": "gpt-5.6-luna",
+            "model": "xiaomi/mimo-v2.5",
             "messages": [{"role": "user", "content": "Think"}],
             "stream": True,
         })
@@ -233,7 +233,7 @@ class TestChatCompletion:
         host, port = proxy_server
         conn = http.client.HTTPConnection(host, port, timeout=10)
         body = json.dumps({
-            "model": "gpt-5.6-luna",
+            "model": "xiaomi/mimo-v2.5",
             "messages": [{"role": "user", "content": "Think"}],
             "stream": False,
         })
@@ -251,7 +251,7 @@ class TestChatCompletion:
         host, port = proxy_server
         conn = http.client.HTTPConnection(host, port, timeout=10)
         body = json.dumps({
-            "model": "gpt-5.6-luna",
+            "model": "xiaomi/mimo-v2.5",
             "messages": [{"role": "user", "content": "Error test"}],
         })
         conn.request("POST", "/v1/chat/completions", body,
@@ -267,7 +267,7 @@ class TestChatCompletion:
         host, port = proxy_server
         conn = http.client.HTTPConnection(host, port, timeout=10)
         body = json.dumps({
-            "model": "gpt-5.6-luna",
+            "model": "xiaomi/mimo-v2.5",
             "messages": [{"role": "user", "content": "Retry test"}],
         })
         conn.request("POST", "/v1/chat/completions", body,
@@ -295,7 +295,7 @@ class TestChatCompletion:
         host, port = proxy_server
         conn = http.client.HTTPConnection(host, port, timeout=10)
         body = json.dumps({
-            "model": "gpt-5.6-luna",
+            "model": "xiaomi/mimo-v2.5",
             "messages": [
                 {"role": "system", "content": "Be helpful."},
                 {"role": "user", "content": "Hello"},
@@ -315,7 +315,7 @@ class TestChatCompletion:
         assert len(handler.request_log) == 1
         upstream_body = handler.request_log[0]["body"]
         assert upstream_body["mode"] == "agent"
-        assert upstream_body["params"]["model"] == "gpt-5.6-luna"
+        assert upstream_body["params"]["model"] == "xiaomi/mimo-v2.5"
         assert upstream_body["params"]["max_tokens"] == 1000
         assert upstream_body["params"]["system"] == "Be helpful."
         msgs = upstream_body["params"]["messages"]
@@ -335,7 +335,7 @@ class TestChatCompletion:
         host, port = proxy_server
         conn = http.client.HTTPConnection(host, port, timeout=10)
         body = json.dumps({
-            "model": "gpt-5.6-luna",
+            "model": "xiaomi/mimo-v2.5",
             "messages": [{"role": "user", "content": "test"}],
         })
         conn.request("POST", "/v1/chat/completions", body,
@@ -363,7 +363,7 @@ class TestChatCompletion:
         host, port = proxy_server
         conn = http.client.HTTPConnection(host, port, timeout=10)
         body = json.dumps({
-            "model": "gpt-5.6-luna",
+            "model": "xiaomi/mimo-v2.5",
             "messages": [
                 {"role": "system", "content": "first"},
                 {"role": "system", "content": "second"},

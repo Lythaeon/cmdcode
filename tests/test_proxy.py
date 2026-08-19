@@ -52,11 +52,11 @@ class TestMapFinishReason:
 
 class TestCompletionJson:
     def test_basic_completion(self):
-        result = _completion_json("gpt-5.6-luna", "Hello", "", [], "stop",
+        result = _completion_json("xiaomi/mimo-v2.5", "Hello", "", [], "stop",
                                    {"inputTokens": 10, "outputTokens": 5,
                                     "cacheReadTokens": 0})
         assert result["object"] == "chat.completion"
-        assert result["model"] == "gpt-5.6-luna"
+        assert result["model"] == "xiaomi/mimo-v2.5"
         assert result["choices"][0]["message"]["content"] == "Hello"
         assert result["choices"][0]["finish_reason"] == "stop"
         assert result["usage"]["prompt_tokens"] == 10
@@ -189,15 +189,15 @@ class TestIsRetryable:
 
 class TestIsModelAllowed:
     def test_all_allowed_by_default(self):
-        assert _is_model_allowed("gpt-5.6-luna") is True
+        assert _is_model_allowed("xiaomi/mimo-v2.5") is True
         assert _is_model_allowed("any-model") is True
 
     def test_allowlist_set(self):
         import command_code_proxy.proxy as pr
         original = pr._allowed_models
         try:
-            pr._allowed_models = {"gpt-5.6-luna", "claude-sonnet-5"}
-            assert _is_model_allowed("gpt-5.6-luna") is True
+            pr._allowed_models = {"xiaomi/mimo-v2.5", "claude-sonnet-5"}
+            assert _is_model_allowed("xiaomi/mimo-v2.5") is True
             assert _is_model_allowed("claude-sonnet-5") is True
             assert _is_model_allowed("other-model") is False
         finally:
@@ -208,6 +208,6 @@ class TestIsModelAllowed:
         original = pr._allowed_models
         try:
             pr._allowed_models = set()
-            assert _is_model_allowed("gpt-5.6-luna") is False
+            assert _is_model_allowed("xiaomi/mimo-v2.5") is False
         finally:
             pr._allowed_models = original

@@ -2,12 +2,17 @@
 
 import json
 import http.server
+import socketserver
 import threading
 import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
+
+
+class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    daemon_threads = True
 
 
 @pytest.fixture(autouse=True)
@@ -21,12 +26,12 @@ def patch_auth_and_config(tmp_path):
         "userName": "testuser",
     }))
     (auth_dir / "config.json").write_text(json.dumps({
-        "model": "gpt-5.6-luna",
+        "model": "xiaomi/mimo-v2.5",
         "tasteLearning": True,
         "oauthEnforced": False,
     }))
     with patch("command_code_proxy.wire_format.AUTH_DIR", auth_dir), \
-         patch("command_code_proxy.wire_format.load_config", return_value={"model": "gpt-5.6-luna"}), \
+         patch("command_code_proxy.wire_format.load_config", return_value={"model": "xiaomi/mimo-v2.5"}), \
          patch("command_code_proxy.proxy.ensure_cli_updated_background"), \
          patch("command_code_proxy.wire_format.get_cli_version", return_value="1.2.3"):
         yield auth_dir
@@ -82,7 +87,8 @@ def mock_upstream():
     MockUpstreamHandler.response_status = 200
     MockUpstreamHandler.request_log = []
 
-    server = http.server.HTTPServer(("127.0.0.1", 0), MockUpstreamHandler)
+    server = ThreadedHTTPServer(("127.0.0.1", 0), MockUpstreamHandler)
+    server.request_queue_size = 128
     host, port = server.server_address
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -102,7 +108,7 @@ def proxy_server(patch_auth_and_config, mock_upstream):
     with patch("command_code_proxy.proxy.API_BASE", api_base), \
          patch("command_code_proxy.wire_format.API_BASE", api_base):
 
-        server = http.server.HTTPServer(("127.0.0.1", 0), ProxyHandler)
+        server = ThreadedHTTPServer(("127.0.0.1", 0), ProxyHandler)
         server.daemon_threads = True
         host, port = server.server_address
         thread = threading.Thread(target=server.serve_forever, daemon=True)

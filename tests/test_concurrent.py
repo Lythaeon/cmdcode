@@ -21,7 +21,7 @@ class TestConcurrentRequests:
         host, port = proxy_server
         conn = http.client.HTTPConnection(host, port, timeout=10)
         body = json.dumps({
-            "model": "gpt-5.6-luna",
+            "model": "xiaomi/mimo-v2.5",
             "messages": [{"role": "user", "content": "test"}],
             "stream": False,
         })
@@ -49,7 +49,7 @@ class TestConcurrentRequests:
             try:
                 conn = http.client.HTTPConnection(host, port, timeout=10)
                 body = json.dumps({
-                    "model": "gpt-5.6-luna",
+                    "model": "xiaomi/mimo-v2.5",
                     "messages": [{"role": "user", "content": f"req-{idx}"}],
                     "stream": False,
                 })
@@ -89,7 +89,7 @@ class TestConcurrentRequests:
             try:
                 conn = http.client.HTTPConnection(host, port, timeout=10)
                 body = json.dumps({
-                    "model": "gpt-5.6-luna",
+                    "model": "xiaomi/mimo-v2.5",
                     "messages": [{"role": "user", "content": f"stream-{idx}"}],
                     "stream": True,
                 })
@@ -126,7 +126,7 @@ class TestConcurrentRequests:
         def make_request(idx):
             conn = http.client.HTTPConnection(host, port, timeout=10)
             body = json.dumps({
-                "model": "gpt-5.6-luna",
+                "model": "xiaomi/mimo-v2.5",
                 "messages": [{"role": "user", "content": f"req-{idx}"}],
                 "stream": False,
             })
@@ -159,7 +159,7 @@ class TestConcurrentRequests:
         def make_request(idx):
             conn = http.client.HTTPConnection(host, port, timeout=10)
             body = json.dumps({
-                "model": "gpt-5.6-luna",
+                "model": "xiaomi/mimo-v2.5",
                 "messages": [{"role": "user", "content": f"tool-{idx}"}],
                 "stream": True,
             })
@@ -193,7 +193,7 @@ class TestConcurrentRequests:
         def make_request(idx, stream):
             conn = http.client.HTTPConnection(host, port, timeout=10)
             body = json.dumps({
-                "model": "gpt-5.6-luna",
+                "model": "xiaomi/mimo-v2.5",
                 "messages": [{"role": "user", "content": f"req-{idx}"}],
                 "stream": stream,
             })
@@ -226,7 +226,7 @@ class TestConcurrentRequests:
                             "inputTokenDetails": {}}},
         ]
         host, port = proxy_server
-        models = ["gpt-5.6-luna", "gpt-5.6-sol", "claude-sonnet-5", "deepseek/deepseek-v4-pro"]
+        models = ["xiaomi/mimo-v2.5", "gpt-5.6-sol", "claude-sonnet-5", "deepseek/deepseek-v4-pro"]
         results = []
 
         def make_request(idx, model):
