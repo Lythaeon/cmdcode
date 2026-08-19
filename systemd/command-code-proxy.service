@@ -38,10 +38,14 @@ Type=simple
 ExecStart=/home/ac/.local/bin/command-code-proxy
 Restart=on-failure
 RestartSec=3
+# The proxy's graceful shutdown can linger; stop it quickly so restarts
+# and config changes do not hang for the full graceful-drain window.
+TimeoutStopSec=10
 # Stop restart loops: at most 5 restarts in a 10s window.
 StartLimitIntervalSec=10
 StartLimitBurst=5
 Environment=RUST_LOG=info
+Environment=COMMAND_CODE_PROXY_LOG_FILE=/home/ac/.local/bin/command-code-proxy-rotated.log
 
 [Install]
 WantedBy=default.target

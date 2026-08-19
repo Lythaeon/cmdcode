@@ -73,11 +73,30 @@ scrapers. When `COMMAND_CODE_PROXY_INCOMING_TOKEN` is set, every other route
 
 The `scripts/` directory ships three helpers:
 
-- `scripts/supervise.sh` — restarts the proxy on crash with exponential
-  backoff (1s to 30s cap). A clean exit (0) stops the supervisor; SIGTERM/SIGINT
-  forward to the child and stop cleanly. Single-instance via `flock`.
+## Supervision and log rotation
+
+**systemd is the preferred supervision mechanism.** A user unit ships at
+`systemd/command-code-proxy.service` with crash-restart (`Restart=on-failure`),
+a stop timeout (`TimeoutStopSec=10`) so restarts do not block on the proxy's
+graceful drain, and a restart-loop guard. Install it with:
+
+```bash
+cp systemd/command-code-proxy.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now command-code-proxy
+systemctl --user status command-code-proxy     # or journalctl --user -u command-code-proxy
+```
+
+The unit sets `COMMAND_CODE_PROXY_LOG_FILE` so the proxy writes its own
+size-rotated log regardless of journald state.
+
+`scripts/` also ships:
+
+- `scripts/supervise.sh` — a fallback for machines without working systemd
+  user services. Restarts the proxy on crash with exponential backoff (1s to
+  30s cap). A clean exit (0) stops it; SIGTERM/SIGINT forward to the child.
 - `scripts/install-supervisor.sh` — installs a `@reboot` cron entry for the
-  supervisor and starts it now. Safe to re-run.
+  supervisor and starts it now.
 - `scripts/soak.sh` — long-duration memory/health soak. Every
   `SOAK_SAMPLE_SECS` (default 300) it checks `/health`, issues one streaming
   chat request, and samples the proxy's RSS, failing if RSS grows more than
@@ -85,7 +104,6 @@ The `scripts/` directory ships three helpers:
   Configure with `SOAK_HOURS` (default 24).
 
 ```bash
-scripts/install-supervisor.sh        # start now + survive reboot
 SOAK_HOURS=8 scripts/soak.sh         # run an 8-hour soak
 ```
 
