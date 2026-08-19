@@ -333,10 +333,16 @@ pub fn wire_messages(messages: &[OpenAiMessage]) -> Vec<CcMessage> {
                     vec![]
                 };
 
-                let cc_items: Vec<CcContentItem> = items
-                    .into_iter()
-                    .filter_map(|v| serde_json::from_value(v).ok())
-                    .collect();
+                // Parse tool results, logging any that fail to deserialize
+                let mut cc_items = Vec::new();
+                for v in items {
+                    match serde_json::from_value::<CcContentItem>(v) {
+                        Ok(item) => cc_items.push(item),
+                        Err(e) => {
+                            eprintln!("[command-code-proxy] warning: failed to parse tool result: {e}");
+                        }
+                    }
+                }
                 if !cc_items.is_empty() {
                     wire.push(CcMessage::Tool { content: cc_items });
                 }

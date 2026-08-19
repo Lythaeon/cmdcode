@@ -183,11 +183,14 @@ impl UpstreamClient {
                     } else {
                         let (tx, rx) = mpsc::channel(256);
                         let stream = response.bytes_stream();
+                        let model_str = model.as_str().to_string();
 
                         tokio::spawn(async move {
                             use futures::StreamExt;
                             let mut buffer = String::new();
                             let mut stream = std::pin::pin!(stream);
+                            let created = chrono_now_secs();
+                            let mut tool_index: u32 = 0;
 
                             while let Some(chunk_result) = stream.next().await {
                                 match chunk_result {
@@ -196,18 +199,134 @@ impl UpstreamClient {
                                         while let Some(newline_pos) = buffer.find('\n') {
                                             let line = buffer[..newline_pos].trim().to_string();
                                             buffer = buffer[newline_pos + 1..].to_string();
-                                            if !line.is_empty() {
-                                                if tx.send(Ok(format!("data: {}\n\n", line))).await.is_err() {
-                                                    return;
+                                            if line.is_empty() { continue; }
+
+                                            let evt = match serde_json::from_str::<UpstreamEvent>(&line) {
+                                                Ok(e) => e,
+                                                Err(_) => continue,
+                                            };
+
+                                            let chunk = match evt.event_type.as_str() {
+                                                "text-delta" => {
+                                                    let text = evt.text.unwrap_or_default();
+                                                    serde_json::json!({
+                                                        "id": format!("chatcmpl-{}", uuid::Uuid::new_v4()),
+                                                        "object": "chat.completion.chunk",
+                                                        "created": created,
+                                                        "model": model_str,
+                                                        "choices": [{
+                                                            "index": 0,
+                                                            "delta": {"content": text},
+                                                            "finish_reason": serde_json::Value::Null,
+                                                        }]
+                                                    })
                                                 }
+                                                "reasoning-delta" => {
+                                                    let text = evt.text.unwrap_or_default();
+                                                    serde_json::json!({
+                                                        "id": format!("chatcmpl-{}", uuid::Uuid::new_v4()),
+                                                        "object": "chat.completion.chunk",
+                                                        "created": created,
+                                                        "model": model_str,
+                                                        "choices": [{
+                                                            "index": 0,
+                                                            "delta": {"reasoning_content": text},
+                                                            "finish_reason": serde_json::Value::Null,
+                                                        }]
+                                                    })
+                                                }
+                                                "tool-call" => {
+                                                    let tc_id = evt.tool_call_id.unwrap_or_default();
+                                                    let name = evt.tool_name.unwrap_or_default();
+                                                    let args = evt.input.unwrap_or(serde_json::Value::Null);
+                                                    let args_str = if args.is_string() {
+                                                        args.as_str().unwrap().to_string()
+                                                    } else {
+                                                        serde_json::to_string(&args).unwrap_or_default()
+                                                    };
+                                                    let idx = tool_index;
+                                                    tool_index += 1;
+                                                    serde_json::json!({
+                                                        "id": format!("chatcmpl-{}", uuid::Uuid::new_v4()),
+                                                        "object": "chat.completion.chunk",
+                                                        "created": created,
+                                                        "model": model_str,
+                                                        "choices": [{
+                                                            "index": 0,
+                                                            "delta": {
+                                                                "tool_calls": [{
+                                                                    "index": idx,
+                                                                    "id": tc_id,
+                                                                    "type": "function",
+                                                                    "function": {
+                                                                        "name": name,
+                                                                        "arguments": args_str,
+                                                                    }
+                                                                }]
+                                                            },
+                                                            "finish_reason": serde_json::Value::Null,
+                                                        }]
+                                                    })
+                                                }
+                                                "finish" => {
+                                                    let raw = evt.raw_finish_reason.as_deref()
+                                                        .or(evt.finish_reason.as_deref())
+                                                        .unwrap_or("stop");
+                                                    let fr = match raw {
+                                                        "tool_use" | "tool-calls" | "tool_calls" => "tool_calls",
+                                                        "length" | "max_tokens" => "length",
+                                                        _ => "stop",
+                                                    };
+                                                    let mut usage_obj = serde_json::json!({});
+                                                    if let Some(u) = evt.total_usage {
+                                                        if let Some(d) = u.input_token_details {
+                                                            usage_obj = serde_json::json!({
+                                                                "prompt_tokens": u.input_tokens.unwrap_or(0),
+                                                                "completion_tokens": u.output_tokens.unwrap_or(0),
+                                                                "total_tokens": u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0),
+                                                                "prompt_tokens_details": {
+                                                                    "cached_tokens": d.cache_read_tokens.unwrap_or(0),
+                                                                }
+                                                            });
+                                                        } else {
+                                                            usage_obj = serde_json::json!({
+                                                                "prompt_tokens": u.input_tokens.unwrap_or(0),
+                                                                "completion_tokens": u.output_tokens.unwrap_or(0),
+                                                                "total_tokens": u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0),
+                                                            });
+                                                        }
+                                                    }
+                                                    let mut chunk = serde_json::json!({
+                                                        "id": format!("chatcmpl-{}", uuid::Uuid::new_v4()),
+                                                        "object": "chat.completion.chunk",
+                                                        "created": created,
+                                                        "model": model_str,
+                                                        "choices": [{
+                                                            "index": 0,
+                                                            "delta": {},
+                                                            "finish_reason": fr,
+                                                        }]
+                                                    });
+                                                    chunk["usage"] = usage_obj;
+                                                    chunk
+                                                }
+                                                "error" => {
+                                                    let msg = evt.error.and_then(|e| e.message)
+                                                        .unwrap_or_else(|| "stream error".into());
+                                                    serde_json::json!({
+                                                        "error": {"message": msg, "type": "upstream_error"}
+                                                    })
+                                                }
+                                                _ => continue,
+                                            };
+
+                                            if tx.send(Ok(format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap_or_default()))).await.is_err() {
+                                                return;
                                             }
                                         }
                                     }
                                     Err(e) => { let _ = tx.send(Err(e.to_string())).await; return; }
                                 }
-                            }
-                            if !buffer.trim().is_empty() {
-                                let _ = tx.send(Ok(format!("data: {}\n\n", buffer.trim()))).await;
                             }
                             let _ = tx.send(Ok("data: [DONE]\n\n".to_string())).await;
                         });
@@ -241,6 +360,13 @@ impl UpstreamClient {
 
 fn is_retryable(status: u16) -> bool {
     matches!(status, 502 | 503 | 504)
+}
+
+fn chrono_now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
 }
 
 fn extract_system(messages: &[proxy_core::wire_format::OpenAiMessage]) -> Option<String> {

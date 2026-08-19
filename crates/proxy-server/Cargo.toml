@@ -25,6 +25,7 @@ http-body = "1"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
+uuid = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
