@@ -20,6 +20,26 @@ pub struct ChatCompletionRequest {
     pub reasoning_effort: Option<String>,
     #[serde(default)]
     pub stream_options: Option<StreamOptions>,
+    #[serde(default)]
+    pub frequency_penalty: Option<f64>,
+    #[serde(default)]
+    pub presence_penalty: Option<f64>,
+    #[serde(default)]
+    pub top_p: Option<f64>,
+    #[serde(default)]
+    pub stop: Option<Vec<String>>,
+    #[serde(default)]
+    pub user: Option<String>,
+    #[serde(default)]
+    pub n: Option<u32>,
+    #[serde(default)]
+    pub seed: Option<u64>,
+    #[serde(default)]
+    pub response_format: Option<serde_json::Value>,
+    #[serde(default)]
+    pub logprobs: Option<bool>,
+    #[serde(default)]
+    pub top_logprobs: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -6,6 +6,8 @@ use proxy_core::auth::AuthManager;
 use proxy_core::config::ProxyConfig;
 use std::sync::Arc;
 
+use crate::upstream::UpstreamClient;
+
 pub struct ProxyService {
     pub config: Arc<ProxyConfig>,
     pub auth: Arc<AuthManager>,
@@ -23,18 +25,13 @@ impl ProxyService {
         let mut server = Server::new(None)?;
         server.bootstrap();
 
-        let upstream_host = extract_host(&self.config.upstream_url)?;
-        let upstream_port = extract_port(&self.config.upstream_url);
-        let tls = self.config.upstream_url.starts_with("https");
-
         let listen_addr = self.config.listen_addr.clone();
+        let upstream_client = Arc::new(UpstreamClient::new(self.config.clone(), self.auth.clone()));
 
         let ctx = handler::CommandCodeProxy {
             config: self.config,
             auth: self.auth,
-            upstream_host,
-            upstream_port,
-            upstream_tls: tls,
+            upstream_client,
         };
 
         let mut my_proxy = handler::create_http_proxy_service(&server.configuration, ctx);
@@ -50,7 +47,6 @@ fn extract_host(url: &str) -> Result<String, Box<dyn std::error::Error + Send + 
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))
         .unwrap_or(url);
-    // Strip path and port
     let host = without_scheme
         .split('/')
         .next()
@@ -88,18 +84,9 @@ mod tests {
 
     #[test]
     fn test_extract_host() {
-        assert_eq!(
-            extract_host("https://api.commandcode.ai").unwrap(),
-            "api.commandcode.ai"
-        );
-        assert_eq!(
-            extract_host("http://localhost:9090").unwrap(),
-            "localhost"
-        );
-        assert_eq!(
-            extract_host("https://api.commandcode.ai/alpha/generate").unwrap(),
-            "api.commandcode.ai"
-        );
+        assert_eq!(extract_host("https://api.commandcode.ai").unwrap(), "api.commandcode.ai");
+        assert_eq!(extract_host("http://localhost:9090").unwrap(), "localhost");
+        assert_eq!(extract_host("https://api.commandcode.ai/alpha/generate").unwrap(), "api.commandcode.ai");
     }
 
     #[test]
@@ -124,6 +111,7 @@ mod tests {
             auth_dir: PathBuf::from("/tmp/test/.commandcode"),
             auth_cache_ttl_secs: 30,
             log_level: "info".into(),
+            max_body_size: 10 * 1024 * 1024,
         };
         let auth = AuthManager::new(config.auth_dir.clone(), 30);
         let _service = ProxyService::new(config, auth);

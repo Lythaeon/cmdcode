@@ -13,14 +13,12 @@ use proxy_core::model_catalog::get_model_catalog;
 use proxy_core::types::RequestId;
 use proxy_core::wire_format::ChatCompletionRequest;
 
-use crate::upstream;
+use crate::upstream::{self, UpstreamClient};
 
 pub struct CommandCodeProxy {
     pub config: Arc<ProxyConfig>,
     pub auth: Arc<AuthManager>,
-    pub upstream_host: String,
-    pub upstream_port: u16,
-    pub upstream_tls: bool,
+    pub upstream_client: Arc<UpstreamClient>,
 }
 
 pub struct RequestCtx {
@@ -51,11 +49,18 @@ impl ProxyHttp for CommandCodeProxy {
         _session: &mut Session,
         _ctx: &mut Self::CTX,
     ) -> PingoraResult<Box<HttpPeer>> {
-        let peer = HttpPeer::new(
-            (self.upstream_host.clone(), self.upstream_port),
-            self.upstream_tls,
-            self.upstream_host.clone(),
-        );
+        let upstream_url = &self.upstream_client.config.upstream_url;
+        let host = upstream_url
+            .split("://").nth(1)
+            .and_then(|s| s.split(':').next())
+            .unwrap_or("api.commandcode.ai")
+            .to_string();
+        let tls = upstream_url.starts_with("https");
+
+        let peer = HttpPeer::new((host.clone(), self.upstream_client.config.upstream_url
+            .split(':').nth(2).and_then(|s| s.split('/').next())
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(if tls { 443 } else { 80 })), tls, host);
         Ok(Box::new(peer))
     }
 
@@ -65,7 +70,7 @@ impl ProxyHttp for CommandCodeProxy {
         upstream_request: &mut RequestHeader,
         _ctx: &mut Self::CTX,
     ) -> PingoraResult<()> {
-        upstream_request.set_uri("/alpha/generate".parse().unwrap());
+        upstream_request.set_uri(http::Uri::from_static("/alpha/generate"));
         Ok(())
     }
 
@@ -114,8 +119,19 @@ impl ProxyHttp for CommandCodeProxy {
             }
         }
 
-        // Read and parse body
+        // Read and parse body with size limit
         let body_bytes = session.read_request_body().await?.unwrap_or_default();
+        if body_bytes.len() > self.config.max_body_size {
+            let err = serde_json::json!({
+                "error": {
+                    "message": format!("Request body too large: {} bytes (max {})", body_bytes.len(), self.config.max_body_size),
+                    "type": "invalid_request_error"
+                }
+            });
+            self.send_json(session, 413, &err).await?;
+            return Ok(true);
+        }
+
         let body: ChatCompletionRequest = match serde_json::from_slice(&body_bytes) {
             Ok(b) => b,
             Err(e) => {
@@ -153,7 +169,7 @@ impl ProxyHttp for CommandCodeProxy {
 
         // Forward to upstream
         let start = Instant::now();
-        let result = upstream::forward_request(&self.config, &self.auth, &model, &body, effort).await;
+        let result = self.upstream_client.forward_request(&model, &body, effort).await;
 
         match result {
             Ok(upstream::UpstreamResponse::Json(completion)) => {
@@ -267,6 +283,7 @@ impl CommandCodeProxy {
         self.send_json(session, 200, &response).await
     }
 
+    /// Send a JSON response — serializes directly to bytes (no double serialization).
     async fn send_json(
         &self,
         session: &mut Session,
@@ -281,6 +298,8 @@ impl CommandCodeProxy {
             resp.insert_header("access-control-allow-headers", "Content-Type, Authorization")?;
         }
         session.write_response_header(Box::new(resp), false).await?;
+
+        // Serialize directly to bytes — avoid intermediate Value serialization
         let bytes = serde_json::to_vec(body)
             .map_err(|e| Error::because(ErrorType::InternalError, "json serialize", e))?;
         session.write_response_body(Some(Bytes::from(bytes)), true).await?;

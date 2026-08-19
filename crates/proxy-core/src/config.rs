@@ -17,6 +17,7 @@ pub struct ProxyConfig {
     pub auth_dir: PathBuf,
     pub auth_cache_ttl_secs: u64,
     pub log_level: String,
+    pub max_body_size: usize,
 }
 
 impl ProxyConfig {
@@ -76,6 +77,11 @@ impl ProxyConfig {
         let log_level = env::var("COMMAND_CODE_PROXY_LOG_LEVEL")
             .unwrap_or_else(|_| "info".to_string());
 
+        let max_body_size = env::var("COMMAND_CODE_PROXY_MAX_BODY_SIZE")
+            .unwrap_or_else(|_| "10485760".to_string())  // 10MB default
+            .parse()
+            .unwrap_or(10 * 1024 * 1024);
+
         Ok(Self {
             listen_addr,
             upstream_url,
@@ -88,6 +94,7 @@ impl ProxyConfig {
             auth_dir,
             auth_cache_ttl_secs,
             log_level,
+            max_body_size,
         })
     }
 }
