@@ -550,3 +550,148 @@ fn test_session_id_generation() {
     let id2 = proxy_core::types::SessionId::generate();
     assert_ne!(id1.as_str(), id2.as_str());
 }
+
+// ============================================================
+// Through-proxy benchmark: real Pingora proxy vs direct mock
+// ============================================================
+
+fn percentile(sorted: &[f64], p: f64) -> f64 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    let idx = ((sorted.len() - 1) as f64 * p).round() as usize;
+    sorted[idx.min(sorted.len() - 1)]
+}
+
+#[tokio::test]
+async fn test_benchmark_through_proxy_vs_direct() {
+    // Start the mock upstream (this is the reference path).
+    let mock_addr = MockUpstream::normal().start().await;
+
+    // Temp auth dir so AuthManager.build_headers() succeeds.
+    let auth_dir = std::env::temp_dir().join(format!("cc-proxy-bench-auth-{}", std::process::id()));
+    std::fs::create_dir_all(&auth_dir).unwrap();
+    std::fs::write(auth_dir.join("auth.json"), r#"{"apiKey":"bench-key-1234567890"}"#).unwrap();
+    std::fs::write(auth_dir.join("config.json"), r#"{}"#).unwrap();
+
+    // Pick a free port for the real proxy.
+    let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_port = probe.local_addr().unwrap().port();
+    drop(probe);
+
+    let config = proxy_core::config::ProxyConfig {
+        listen_addr: format!("127.0.0.1:{}", proxy_port),
+        upstream_url: format!("http://{}", mock_addr),
+        default_model: "xiaomi/mimo-v2.5".into(),
+        upstream_timeout_secs: 30,
+        max_retries: 0,
+        max_concurrent: 0,
+        cors_origin: None,
+        model_allowlist: None,
+        auth_dir: auth_dir.clone(),
+        auth_cache_ttl_secs: 60,
+        log_level: "error".into(),
+        max_body_size: 10 * 1024 * 1024,
+        stream_idle_timeout_secs: 180,
+    };
+    let auth = proxy_core::auth::AuthManager::new(auth_dir.clone(), 60);
+
+    // Run the REAL Pingora proxy in a background thread.
+    std::thread::spawn(move || {
+        let service = proxy_server::ProxyService::new(config, auth);
+        let _ = service.run();
+    });
+
+    let proxy_url = format!("http://127.0.0.1:{}", proxy_port);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap();
+
+    // Wait for readiness.
+    let mut ready = false;
+    for _ in 0..100 {
+        if let Ok(r) = client.get(format!("{}/health", proxy_url)).send().await {
+            if r.status().is_success() {
+                ready = true;
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(ready, "proxy did not become ready in time");
+
+    let body = r#"{"model":"xiaomi/mimo-v2.5","stream":false,"messages":[{"role":"user","content":"hi"}]}"#;
+    let direct_url = format!("http://{}/alpha/generate", mock_addr);
+    let n = 500;
+
+    // Warm up both paths.
+    for _ in 0..20 {
+        let _ = client
+            .post(&proxy_url)
+            .header("content-type", "application/json")
+            .header("authorization", "Bearer bench-key-1234567890")
+            .body(body)
+            .send()
+            .await;
+        let _ = client.post(&direct_url).body(body).send().await;
+    }
+
+    // Measure through the proxy.
+    let mut proxy_times = Vec::with_capacity(n);
+    let mut proxy_ok = 0;
+    for _ in 0..n {
+        let start = std::time::Instant::now();
+        let r = client
+            .post(format!("{}/v1/chat/completions", proxy_url))
+            .header("content-type", "application/json")
+            .header("authorization", "Bearer bench-key-1234567890")
+            .body(body)
+            .send()
+            .await;
+        if let Ok(r) = r {
+            if r.status().is_success() {
+                proxy_ok += 1;
+            }
+        }
+        proxy_times.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+
+    // Measure direct to the mock.
+    let mut direct_times = Vec::with_capacity(n);
+    let mut direct_ok = 0;
+    for _ in 0..n {
+        let start = std::time::Instant::now();
+        let r = client.post(&direct_url).body(body).send().await;
+        if let Ok(r) = r {
+            if r.status().is_success() {
+                direct_ok += 1;
+            }
+        }
+        direct_times.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+
+    let mut proxy_sorted = proxy_times.clone();
+    let mut direct_sorted = direct_times.clone();
+    proxy_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    direct_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    let pp50 = percentile(&proxy_sorted, 0.50);
+    let pp95 = percentile(&proxy_sorted, 0.95);
+    let pp99 = percentile(&proxy_sorted, 0.99);
+    let dp50 = percentile(&direct_sorted, 0.50);
+    let dp95 = percentile(&direct_sorted, 0.95);
+    let dp99 = percentile(&direct_sorted, 0.99);
+
+    eprintln!("[bench] proxy  : p50={:.3}ms p95={:.3}ms p99={:.3}ms ({} ok)", pp50, pp95, pp99, proxy_ok);
+    eprintln!("[bench] direct : p50={:.3}ms p95={:.3}ms p99={:.3}ms ({} ok)", dp50, dp95, dp99, direct_ok);
+    eprintln!("[bench] overhead: p50=+{:.3}ms p95=+{:.3}ms p99=+{:.3}ms", pp50 - dp50, pp95 - dp95, pp99 - dp99);
+
+    // Both paths must be reliable.
+    assert!(proxy_ok >= n * 98 / 100, "proxy success rate too low: {}/{}", proxy_ok, n);
+    assert!(direct_ok >= n * 98 / 100, "direct success rate too low: {}/{}", direct_ok, n);
+
+    // Proxy overhead must stay small on warm loopback (generous bound to avoid flakiness).
+    assert!(pp50 < dp50 + 25.0, "proxy p50 overhead too high: {:.3}ms vs direct {:.3}ms", pp50, dp50);
+    assert!(pp99 < dp99 + 50.0, "proxy p99 overhead too high: {:.3}ms vs direct {:.3}ms", pp99, dp99);
+}
