@@ -5,25 +5,13 @@ use proxy_core::types::{Effort, FinishReason, ModelId};
 use proxy_core::wire_format::{
     build_completion, wire_messages, wire_tools, CcUsage, ChatCompletionRequest, UpstreamEvent,
 };
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Semaphore};
 
 pub enum UpstreamResponse {
     Json(serde_json::Value),
     Sse { rx: mpsc::Receiver<Result<String, String>> },
-}
-
-/// Cached git config — computed once at startup.
-static GIT_CONFIG: OnceLock<serde_json::Value> = OnceLock::new();
-
-fn get_git_config() -> serde_json::Value {
-    GIT_CONFIG.get_or_init(|| {
-        let cwd = std::env::current_dir()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| ".".to_string());
-        build_git_config_sync(&cwd)
-    }).clone()
 }
 
 /// Shared upstream client — connection pool + concurrency limiter.
@@ -77,10 +65,9 @@ impl UpstreamClient {
         let wire_msgs = wire_messages(&body.messages);
         let wire_tools = wire_tools(body.tools.as_deref().unwrap_or_default());
         let max_tokens = body.max_tokens.unwrap_or(64000);
-        let git_config = get_git_config();
 
         let upstream_body = serde_json::json!({
-            "config": git_config,
+            "config": {},
             "memory": null,
             "taste": null,
             "skills": null,
@@ -254,65 +241,6 @@ impl UpstreamClient {
 
 fn is_retryable(status: u16) -> bool {
     matches!(status, 502 | 503 | 504)
-}
-
-fn build_git_config_sync(cwd: &str) -> serde_json::Value {
-    let is_dir = std::path::Path::new(cwd).is_dir();
-    let structure: Vec<String> = if is_dir {
-        std::fs::read_dir(cwd)
-            .ok()
-            .map(|entries| {
-                entries.filter_map(|e| e.ok())
-                    .map(|e| e.file_name().to_string_lossy().to_string())
-                    .filter(|name| !name.starts_with('.'))
-                    .filter(|name| !matches!(name.as_str(), "node_modules" | "dist" | "build" | ".git" | ".svn" | ".hg" | "coverage" | ".nyc_output" | ".cache" | "tmp" | "temp" | ".next" | ".nuxt" | "out"))
-                    .collect()
-            })
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-
-    let is_git = std::process::Command::new("git")
-        .args(["rev-parse", "--git-dir"])
-        .current_dir(cwd)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    let (branch, main_branch, status_str, commits) = if is_git {
-        let branch = std::process::Command::new("git").args(["branch", "--show-current"]).current_dir(cwd).output().ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok()).map(|s| s.trim().to_string()).unwrap_or_default();
-        let main = std::process::Command::new("git").args(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).current_dir(cwd).output().ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok()).map(|s| s.trim().replace("origin/", "")).unwrap_or_else(|| "main".to_string());
-        let status = std::process::Command::new("git").args(["status", "--porcelain"]).current_dir(cwd).output().ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| if s.trim().is_empty() { "Working tree clean".to_string() } else { s.trim().to_string() })
-            .unwrap_or_else(|| "Working tree clean".to_string());
-        let commits = std::process::Command::new("git").args(["log", "--oneline", "-3"]).current_dir(cwd).output().ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().split('\n').map(String::from).collect::<Vec<_>>())
-            .unwrap_or_default();
-        (branch, main, status, commits)
-    } else {
-        (String::new(), String::new(), String::new(), Vec::new())
-    };
-
-    let date = time::OffsetDateTime::now_utc()
-        .format(&time::macros::format_description!("[year]-[month]-[day]"))
-        .unwrap_or_default();
-
-    serde_json::json!({
-        "workingDir": cwd,
-        "date": date,
-        "environment": std::env::consts::OS,
-        "structure": structure,
-        "isGitRepo": is_git,
-        "currentBranch": branch,
-        "mainBranch": main_branch,
-        "gitStatus": status_str,
-        "recentCommits": commits,
-    })
 }
 
 fn extract_system(messages: &[proxy_core::wire_format::OpenAiMessage]) -> Option<String> {
