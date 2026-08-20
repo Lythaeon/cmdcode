@@ -13,7 +13,7 @@ env:
 
 jobs:
   gate:
-    name: fmt + clippy + test
+    name: Quality gate
     runs-on: ubuntu-latest
 
     steps:
