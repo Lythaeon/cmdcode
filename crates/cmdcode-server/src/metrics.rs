@@ -7,21 +7,37 @@ use std::time::SystemTime;
 /// paths and safe under concurrent streams. Rendering is lock-free.
 #[derive(Debug)]
 pub struct Metrics {
+    /// Total number of requests received.
     pub requests_total: AtomicU64,
+    /// Number of streaming requests.
     pub stream_requests: AtomicU64,
+    /// Number of non-streaming requests.
     pub nonstream_requests: AtomicU64,
+    /// Total SSE chunks forwarded.
     pub chunks_total: AtomicU64,
+    /// Total response bytes written.
     pub bytes_out_total: AtomicU64,
+    /// Total upstream retry attempts.
     pub upstream_retries_total: AtomicU64,
+    /// Total errors encountered.
     pub errors_total: AtomicU64,
+    /// Requests rejected for unparseable body.
     pub bad_requests: AtomicU64,
+    /// Requests rejected for exceeding body size limit.
     pub body_too_large: AtomicU64,
+    /// Requests rejected by the model allowlist.
     pub model_denied: AtomicU64,
+    /// Requests hitting unknown routes.
     pub unknown_routes: AtomicU64,
+    /// Client disconnects mid-stream.
     pub client_disconnects: AtomicU64,
+    /// Upstream timeouts observed.
     pub upstream_timeouts: AtomicU64,
+    /// Upstream events skipped as malformed or unknown.
     pub skipped_events: AtomicU64,
+    /// Streams that ended with truncated data.
     pub truncated_streams: AtomicU64,
+    /// Number of streams currently open.
     pub active_streams: AtomicI64,
     started_at: SystemTime,
 }
@@ -33,6 +49,7 @@ impl Default for Metrics {
 }
 
 impl Metrics {
+    /// Create a new `Metrics` instance with all counters at zero.
     pub fn new() -> Self {
         Self {
             requests_total: AtomicU64::new(0),
@@ -55,6 +72,7 @@ impl Metrics {
         }
     }
 
+    /// Record a new request, optionally marked as streaming.
     pub fn inc_request(&self, stream: bool) {
         self.requests_total.fetch_add(1, Ordering::Relaxed);
         if stream {
@@ -64,64 +82,78 @@ impl Metrics {
         }
     }
 
+    /// Add `n` to the chunks counter.
     pub fn inc_chunks(&self, n: u32) {
         self.chunks_total.fetch_add(n as u64, Ordering::Relaxed);
     }
 
+    /// Add `n` bytes to the output bytes counter.
     pub fn inc_bytes_out(&self, n: usize) {
         self.bytes_out_total.fetch_add(n as u64, Ordering::Relaxed);
     }
 
+    /// Increment the upstream retries counter.
     pub fn inc_retries(&self) {
         self.upstream_retries_total.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Increment the errors counter.
     pub fn inc_error(&self) {
         self.errors_total.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Increment the bad requests counter.
     pub fn inc_bad_requests(&self) {
         self.bad_requests.fetch_add(1, Ordering::Relaxed);
         self.inc_error();
     }
 
+    /// Increment the body too large counter.
     pub fn inc_body_too_large(&self) {
         self.body_too_large.fetch_add(1, Ordering::Relaxed);
         self.inc_error();
     }
 
+    /// Increment the model denied counter.
     pub fn inc_model_denied(&self) {
         self.model_denied.fetch_add(1, Ordering::Relaxed);
         self.inc_error();
     }
 
+    /// Increment the unknown routes counter.
     pub fn inc_unknown_route(&self) {
         self.unknown_routes.fetch_add(1, Ordering::Relaxed);
         self.inc_error();
     }
 
+    /// Increment the client disconnects counter.
     pub fn inc_client_disconnect(&self) {
         self.client_disconnects.fetch_add(1, Ordering::Relaxed);
         self.inc_error();
     }
 
+    /// Increment the upstream timeouts counter.
     pub fn inc_upstream_timeout(&self) {
         self.upstream_timeouts.fetch_add(1, Ordering::Relaxed);
         self.inc_error();
     }
 
+    /// Increment the skipped events counter.
     pub fn inc_skipped(&self) {
         self.skipped_events.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Increment the truncated streams counter.
     pub fn inc_truncated_stream(&self) {
         self.truncated_streams.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Increment the active streams gauge.
     pub fn stream_started(&self) {
         self.active_streams.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Decrement the active streams gauge.
     pub fn stream_finished(&self) {
         self.active_streams.fetch_add(-1, Ordering::Relaxed);
     }

@@ -1,6 +1,13 @@
+//! HTTP proxy server that translates OpenAI-compatible requests to the Command
+//! Code upstream API.
+
+/// Request handler implementing the pingora `ProxyHttp` trait.
 pub mod handler;
+/// Rotating log file writer for tracing output.
 pub mod logging;
+/// Prometheus-style metrics counters and rendering.
 pub mod metrics;
+/// Upstream HTTP client with retry and SSE streaming.
 pub mod upstream;
 
 use cmdcode_core::auth::AuthManager;
@@ -11,12 +18,16 @@ use std::sync::Arc;
 use crate::metrics::Metrics;
 use crate::upstream::UpstreamClient;
 
+/// Top-level proxy service that owns configuration and starts the server.
 pub struct ProxyService {
+    /// Proxy configuration.
     pub config: Arc<ProxyConfig>,
+    /// Authentication credential manager.
     pub auth: Arc<AuthManager>,
 }
 
 impl ProxyService {
+    /// Create a new proxy service from the given config and auth manager.
     pub fn new(config: ProxyConfig, auth: AuthManager) -> Self {
         Self {
             config: Arc::new(config),
@@ -24,6 +35,7 @@ impl ProxyService {
         }
     }
 
+    /// Start the proxy server and run forever.
     pub fn run(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut server = Server::new(None)?;
         server.bootstrap();

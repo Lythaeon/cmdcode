@@ -1,3 +1,5 @@
+//! Command Code OpenAI-compatible proxy server binary.
+
 use cmdcode_core::auth::AuthManager;
 use cmdcode_core::config::ProxyConfig;
 use cmdcode_server::logging::RotatingLog;

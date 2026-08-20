@@ -15,6 +15,7 @@ pub struct RotatingLog {
 }
 
 impl RotatingLog {
+    /// Open a new rotating log file at `path` with the given size and keep limits.
     pub fn new(path: PathBuf, max_bytes: u64, keep: usize) -> io::Result<Self> {
         let file = RotatingFile::open(&path, max_bytes, keep)?;
         Ok(Self {

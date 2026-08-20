@@ -29,8 +29,7 @@ cargo install cmdcode
 # Or build from source
 git clone https://github.com/Lythaeon/cmdcode.git
 cd cmdcode
-cargo install --path crates/proxy-cli
-```
+cargo install --path crates/cmdcode-cli
 
 # Run
 cargo run --release

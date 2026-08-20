@@ -4,197 +4,311 @@ use std::collections::HashMap;
 
 // === OpenAI request types =================================================
 
+/// Incoming OpenAI-compatible chat completion request.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChatCompletionRequest {
+    /// Model identifier (e.g. `gpt-4`).
     pub model: Option<String>,
+    /// Conversation messages.
     pub messages: Vec<OpenAiMessage>,
+    /// Tool definitions available to the model.
     #[serde(default)]
     pub tools: Option<Vec<OpenAiTool>>,
+    /// Maximum tokens to generate.
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    /// Sampling temperature.
     #[serde(default)]
     pub temperature: Option<f64>,
+    /// Whether to stream the response.
     #[serde(default)]
     pub stream: Option<bool>,
+    /// Reasoning effort level (e.g. `low`, `high`).
     #[serde(default)]
     pub reasoning_effort: Option<String>,
+    /// Streaming options such as usage reporting.
     #[serde(default)]
     pub stream_options: Option<StreamOptions>,
+    /// Frequency penalty value.
     #[serde(default)]
     pub frequency_penalty: Option<f64>,
+    /// Presence penalty value.
     #[serde(default)]
     pub presence_penalty: Option<f64>,
+    /// Nucleus sampling threshold.
     #[serde(default)]
     pub top_p: Option<f64>,
+    /// Stop sequences.
     #[serde(default)]
     pub stop: Option<Vec<String>>,
+    /// End-user identifier.
     #[serde(default)]
     pub user: Option<String>,
+    /// Number of completions to generate.
     #[serde(default)]
     pub n: Option<u32>,
+    /// Random seed for reproducibility.
     #[serde(default)]
     pub seed: Option<u64>,
+    /// Response format specification.
     #[serde(default)]
     pub response_format: Option<serde_json::Value>,
+    /// Whether to include log probabilities.
     #[serde(default)]
     pub logprobs: Option<bool>,
+    /// Number of top log probabilities to return.
     #[serde(default)]
     pub top_logprobs: Option<u32>,
 }
 
+/// Options controlling streaming behaviour.
 #[derive(Debug, Clone, Deserialize)]
 pub struct StreamOptions {
+    /// Whether to include token usage in the final chunk.
     #[serde(default)]
     pub include_usage: Option<bool>,
 }
 
+/// A single message in the OpenAI chat format.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OpenAiMessage {
+    /// Role of the message sender (`system`, `user`, `assistant`, `tool`).
     pub role: String,
+    /// Message content (string or structured parts).
     #[serde(default)]
     pub content: Option<serde_json::Value>,
+    /// Tool call ID for tool-role messages.
     #[serde(default, alias = "tool_call_id")]
     pub tool_call_id: Option<String>,
+    /// Tool calls made by the assistant.
     #[serde(default)]
     pub tool_calls: Option<Vec<OpenAiToolCall>>,
 }
 
+/// Tool definition in OpenAI format.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OpenAiTool {
+    /// Tool type (typically `function`).
     #[serde(rename = "type")]
     pub tool_type: String,
+    /// Function definition for function-type tools.
     #[serde(default)]
     pub function: Option<OpenAiFunction>,
+    /// Tool name (used when `function` is absent).
     #[serde(default)]
     pub name: Option<String>,
+    /// Tool description.
     #[serde(default)]
     pub description: Option<String>,
+    /// JSON Schema for the tool input.
     #[serde(default, alias = "input_schema")]
     pub input_schema: Option<serde_json::Value>,
+    /// Alternative parameter schema.
     #[serde(default)]
     pub parameters: Option<serde_json::Value>,
 }
 
+/// Function definition within a tool.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OpenAiFunction {
+    /// Function name.
     pub name: String,
+    /// Description of what the function does.
     #[serde(default)]
     pub description: Option<String>,
+    /// JSON Schema for the function parameters.
     #[serde(default)]
     pub parameters: Option<serde_json::Value>,
 }
 
+/// A tool call made by the assistant.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OpenAiToolCall {
+    /// Tool call identifier.
     pub id: Option<String>,
+    /// Function call details.
     #[serde(default)]
     pub function: Option<OpenAiFunctionRef>,
 }
 
+/// Reference to a function call within a tool call.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OpenAiFunctionRef {
+    /// Function name.
     pub name: Option<String>,
+    /// JSON-encoded function arguments.
     #[serde(default)]
     pub arguments: Option<String>,
 }
 
 // === Command Code wire types ==============================================
 
+/// Top-level request body sent to the Command Code upstream.
 #[derive(Debug, Clone, Serialize)]
 pub struct CcRequest {
+    /// Working-directory metadata.
     pub config: CcConfig,
+    /// Conversation memory.
     pub memory: Option<serde_json::Value>,
+    /// Taste-learning data.
     pub taste: Option<serde_json::Value>,
+    /// Skill definitions.
     pub skills: Option<serde_json::Value>,
+    /// Permission mode (e.g. `standard`).
     pub permission_mode: String,
+    /// Execution mode (e.g. `agent`).
     pub mode: String,
+    /// Model parameters, messages, and tool definitions.
     pub params: CcParams,
 }
 
+/// Working-directory metadata for the upstream request.
 #[derive(Debug, Clone, Serialize)]
 pub struct CcConfig {
+    /// Current working directory path.
     pub working_dir: String,
+    /// Current date in `YYYY-MM-DD` format.
     pub date: String,
+    /// Runtime environment name (e.g. `linux`).
     pub environment: String,
+    /// Non-hidden entries in the working directory.
     pub structure: Vec<String>,
+    /// Whether the working directory is a git repository.
     pub is_git_repo: bool,
+    /// Current git branch name.
     pub current_branch: String,
+    /// Main branch name.
     pub main_branch: String,
+    /// Git status output.
     pub git_status: String,
+    /// Recent git commit messages.
     pub recent_commits: Vec<String>,
 }
 
+/// Model parameters for the upstream request.
 #[derive(Debug, Clone, Serialize)]
 pub struct CcParams {
+    /// Model identifier.
     pub model: String,
+    /// Conversation messages.
     pub messages: Vec<CcMessage>,
+    /// Available tools.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<CcTool>,
+    /// Maximum tokens to generate.
     pub max_tokens: u32,
+    /// Whether to stream the response.
     pub stream: bool,
+    /// System prompt.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
+    /// Sampling temperature.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,
+    /// Reasoning effort level.
     #[serde(skip_serializing_if = "Option::is_none", rename = "reasoning_effort")]
     pub reasoning_effort: Option<String>,
 }
 
+/// Message in the Command Code wire format.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "role")]
 pub enum CcMessage {
+    /// System-level instruction.
     #[serde(rename = "system")]
-    System { content: String },
+    System {
+        /// System prompt text.
+        content: String,
+    },
+    /// User message.
     #[serde(rename = "user")]
-    User { content: Vec<CcContentItem> },
+    User {
+        /// Content items in the user message.
+        content: Vec<CcContentItem>,
+    },
+    /// Assistant message.
     #[serde(rename = "assistant")]
-    Assistant { content: Vec<CcContentItem> },
+    Assistant {
+        /// Content items in the assistant response.
+        content: Vec<CcContentItem>,
+    },
+    /// Tool result message.
     #[serde(rename = "tool")]
-    Tool { content: Vec<CcContentItem> },
+    Tool {
+        /// Tool result content items.
+        content: Vec<CcContentItem>,
+    },
 }
 
+/// A single content item within a message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum CcContentItem {
+    /// Plain text content.
     #[serde(rename = "text")]
-    Text { text: String },
+    Text {
+        /// Text content.
+        text: String,
+    },
+    /// Image content.
     #[serde(rename = "image")]
     Image {
+        /// Image URL or base64 data URI.
         image: String,
+        /// MIME type of the image.
         #[serde(rename = "mimeType")]
         mime_type: String,
     },
+    /// Tool call made by the assistant.
     #[serde(rename = "tool-call")]
     ToolCall {
+        /// Unique tool call identifier.
         #[serde(rename = "toolCallId")]
         tool_call_id: String,
+        /// Name of the tool being called.
         #[serde(rename = "toolName")]
         tool_name: String,
+        /// Tool input arguments.
         input: serde_json::Value,
     },
+    /// Tool call result.
     #[serde(rename = "tool-result")]
     ToolResult {
+        /// Identifier of the tool call this result responds to.
         #[serde(rename = "toolCallId")]
         tool_call_id: String,
+        /// Name of the tool that produced this result.
         #[serde(rename = "toolName")]
         tool_name: String,
+        /// Tool output value.
         output: CcOutput,
     },
+    /// Reasoning or chain-of-thought content.
     #[serde(rename = "reasoning")]
-    Reasoning { text: String },
+    Reasoning {
+        /// Reasoning text.
+        text: String,
+    },
 }
 
+/// Output value produced by a tool call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CcOutput {
+    /// Output type discriminator (e.g. `text`).
     #[serde(rename = "type")]
     pub output_type: String,
+    /// Output value as a string.
     pub value: String,
 }
 
+/// Tool definition in the Command Code wire format.
 #[derive(Debug, Clone, Serialize)]
 pub struct CcTool {
+    /// Tool name.
     pub name: String,
+    /// Tool description.
     pub description: String,
+    /// JSON Schema for the tool input.
     pub input_schema: serde_json::Value,
 }
 
@@ -508,57 +622,87 @@ fn extract_assistant_content(
 
 // === OpenAI response types ================================================
 
+/// Non-streaming chat completion response.
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatCompletionResponse {
+    /// Unique response identifier.
     pub id: String,
+    /// Object type (always `chat.completion`).
     pub object: String,
+    /// Unix timestamp of creation.
     pub created: i64,
+    /// Model that generated the response.
     pub model: String,
+    /// Completion choices.
     pub choices: Vec<CompletionChoice>,
+    /// Token usage statistics.
     pub usage: Usage,
 }
 
+/// A single completion choice.
 #[derive(Debug, Clone, Serialize)]
 pub struct CompletionChoice {
+    /// Choice index within the response.
     pub index: u32,
+    /// The generated message.
     pub message: ResponseMessage,
+    /// Reason the model stopped generating.
     pub finish_reason: String,
 }
 
+/// Message in a completion response.
 #[derive(Debug, Clone, Serialize)]
 pub struct ResponseMessage {
+    /// Role of the message sender (always `assistant`).
     pub role: String,
+    /// Generated text content.
     pub content: Option<String>,
+    /// Chain-of-thought reasoning content.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
+    /// Tool calls made by the model.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ResponseToolCall>>,
 }
 
+/// Tool call in a completion response.
 #[derive(Debug, Clone, Serialize)]
 pub struct ResponseToolCall {
+    /// Tool call identifier.
     pub id: String,
+    /// Tool type (always `function`).
     pub r#type: String,
+    /// Function call details.
     pub function: ResponseFunction,
 }
 
+/// Function details within a tool call response.
 #[derive(Debug, Clone, Serialize)]
 pub struct ResponseFunction {
+    /// Function name.
     pub name: String,
+    /// JSON-encoded function arguments.
     pub arguments: String,
 }
 
+/// Token usage statistics for a completion.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Usage {
+    /// Tokens in the prompt.
     pub prompt_tokens: u32,
+    /// Tokens generated by the model.
     pub completion_tokens: u32,
+    /// Total tokens used.
     pub total_tokens: u32,
+    /// Detailed prompt token breakdown.
     #[serde(default)]
     pub prompt_tokens_details: Option<PromptTokenDetails>,
 }
 
+/// Detailed prompt token statistics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromptTokenDetails {
+    /// Number of cached prompt tokens.
     #[serde(default)]
     pub cached_tokens: u32,
 }
@@ -627,8 +771,11 @@ pub fn build_completion(
 /// Usage from upstream NDJSON.
 #[derive(Debug, Clone, Default)]
 pub struct CcUsage {
+    /// Number of input tokens.
     pub input_tokens: u32,
+    /// Number of output tokens.
     pub output_tokens: u32,
+    /// Number of tokens read from the cache.
     pub cache_read_tokens: u32,
 }
 
@@ -641,46 +788,64 @@ fn chrono_now_secs() -> i64 {
 
 // === Upstream event parsing ===============================================
 
+/// A single NDJSON event from the Command Code upstream.
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpstreamEvent {
+    /// Event type discriminator (e.g. `text-delta`, `finish`, `error`).
     #[serde(rename = "type")]
     pub event_type: String,
+    /// Text content for delta events.
     #[serde(default)]
     pub text: Option<String>,
+    /// Tool call identifier.
     #[serde(default, alias = "toolCallId")]
     pub tool_call_id: Option<String>,
+    /// Tool name.
     #[serde(default, alias = "toolName")]
     pub tool_name: Option<String>,
+    /// Tool input arguments.
     #[serde(default)]
     pub input: Option<serde_json::Value>,
+    /// Finish reason (e.g. `stop`, `tool_calls`).
     #[serde(default, alias = "finishReason")]
     pub finish_reason: Option<String>,
+    /// Raw upstream finish reason before normalization.
     #[serde(default, alias = "rawFinishReason")]
     pub raw_finish_reason: Option<String>,
+    /// Token usage summary in the finish event.
     #[serde(default, alias = "totalUsage")]
     pub total_usage: Option<UpstreamUsage>,
+    /// Error details if the event type is `error`.
     #[serde(default)]
     pub error: Option<UpstreamError>,
 }
 
+/// Token usage reported by the upstream in a finish event.
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpstreamUsage {
+    /// Number of input tokens.
     #[serde(default, alias = "inputTokens")]
     pub input_tokens: Option<u32>,
+    /// Number of output tokens.
     #[serde(default, alias = "outputTokens")]
     pub output_tokens: Option<u32>,
+    /// Detailed input token breakdown.
     #[serde(default, alias = "inputTokenDetails")]
     pub input_token_details: Option<UpstreamTokenDetails>,
 }
 
+/// Detailed input token breakdown from the upstream.
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpstreamTokenDetails {
+    /// Number of tokens read from the prompt cache.
     #[serde(default, alias = "cacheReadTokens")]
     pub cache_read_tokens: Option<u32>,
 }
 
+/// Error details from an upstream error event.
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpstreamError {
+    /// Error message from the upstream.
     pub message: Option<String>,
 }
 

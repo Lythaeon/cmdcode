@@ -11,24 +11,35 @@ use tokio::sync::{mpsc, Semaphore};
 
 use crate::metrics::Metrics;
 
+/// Response from the upstream API.
 pub enum UpstreamResponse {
+    /// A complete non-streaming JSON response.
     Json(serde_json::Value),
+    /// A streaming SSE response with a channel receiver and cancellation token.
     Sse {
+        /// Receiver for SSE lines.
         rx: mpsc::Receiver<Result<String, String>>,
+        /// Token to cancel the stream.
         cancel: tokio_util::sync::CancellationToken,
     },
 }
 
 /// Shared upstream client — connection pool + concurrency limiter.
 pub struct UpstreamClient {
+    /// Shared HTTP client with connection pooling.
     pub http: reqwest::Client,
+    /// Proxy configuration.
     pub config: Arc<ProxyConfig>,
+    /// Authentication credential manager.
     pub auth: Arc<AuthManager>,
+    /// Request and stream metrics.
     pub metrics: Arc<Metrics>,
+    /// Concurrency limiter (None = unlimited).
     pub semaphore: Option<Arc<Semaphore>>,
 }
 
 impl UpstreamClient {
+    /// Create a new upstream client with connection pooling and optional concurrency limit.
     #[allow(clippy::expect_used)]
     pub fn new(config: Arc<ProxyConfig>, auth: Arc<AuthManager>, metrics: Arc<Metrics>) -> Self {
         let http = reqwest::Client::builder()
@@ -55,6 +66,7 @@ impl UpstreamClient {
         }
     }
 
+    /// Forward a chat completion request to the upstream API with retries.
     #[allow(clippy::expect_used)]
     pub async fn forward_request(
         &self,
@@ -552,9 +564,13 @@ fn build_config(cwd: &str) -> serde_json::Value {
 
 /// Shared per-stream state for NDJSON -> OpenAI SSE translation.
 pub struct StreamState<'a> {
+    /// Completion identifier shared across all chunks.
     pub completion_id: &'a str,
+    /// Unix timestamp of stream creation.
     pub created: i64,
+    /// Model identifier.
     pub model: &'a str,
+    /// Running index for tool call chunks.
     pub tool_index: u32,
     /// Number of malformed / unknown upstream events skipped so far.
     pub skipped: u32,

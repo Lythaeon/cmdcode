@@ -10,14 +10,19 @@ use tokio::sync::RwLock;
 /// Raw auth file contents.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthData {
+    /// API key for upstream authentication.
     #[serde(default, alias = "apiKey")]
     pub api_key: Option<String>,
+    /// OAuth token for upstream authentication.
     #[serde(default, alias = "oauthToken")]
     pub oauth_token: Option<String>,
+    /// OAuth provider name.
     #[serde(default, alias = "oauthProvider")]
     pub oauth_provider: Option<String>,
+    /// User identifier.
     #[serde(default, alias = "userId")]
     pub user_id: Option<String>,
+    /// Human-readable user name.
     #[serde(default, alias = "userName")]
     pub user_name: Option<String>,
 }
@@ -25,10 +30,13 @@ pub struct AuthData {
 /// Raw config file contents.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConfigData {
+    /// Preferred model name.
     #[serde(default)]
     pub model: Option<String>,
+    /// Whether taste-learning is enabled.
     #[serde(default, alias = "tasteLearning")]
     pub taste_learning: Option<bool>,
+    /// Whether OAuth is enforced.
     #[serde(default, alias = "oauthEnforced")]
     pub oauth_enforced: Option<bool>,
 }
@@ -36,8 +44,15 @@ pub struct ConfigData {
 /// Authentication method.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthMethod {
+    /// API key authentication.
     ApiKey(String),
-    OAuth { token: String, provider: String },
+    /// OAuth token authentication.
+    OAuth {
+        /// OAuth access token.
+        token: String,
+        /// OAuth provider name.
+        provider: String,
+    },
 }
 
 /// Cached auth state with TTL.
@@ -66,6 +81,7 @@ pub struct AuthManager {
 }
 
 impl AuthManager {
+    /// Create a new auth manager that reads credentials from `auth_dir`.
     pub fn new(auth_dir: PathBuf, cache_ttl_secs: u64) -> Self {
         Self {
             auth_dir,
@@ -74,6 +90,7 @@ impl AuthManager {
         }
     }
 
+    /// Returns the cached auth method, refreshing from disk if expired.
     pub async fn get_auth_method(&self) -> Result<AuthMethod, AuthError> {
         let needs_refresh = {
             let state = self.state.read().await;
@@ -91,6 +108,7 @@ impl AuthManager {
             .ok_or(AuthError::NoAuthConfigured)
     }
 
+    /// Returns the cached config data, refreshing from disk if expired.
     pub async fn get_config(&self) -> ConfigData {
         let needs_refresh = {
             let state = self.state.read().await;

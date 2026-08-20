@@ -1,3 +1,5 @@
+//! Integration tests for the cmdcode-server proxy.
+
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::net::SocketAddr;

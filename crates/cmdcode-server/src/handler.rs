@@ -16,18 +16,27 @@ use cmdcode_core::wire_format::ChatCompletionRequest;
 use crate::metrics::Metrics;
 use crate::upstream::{self, UpstreamClient};
 
+/// Pingora proxy handler that forwards requests to Command Code.
 pub struct CommandCodeProxy {
+    /// Proxy configuration.
     pub config: Arc<ProxyConfig>,
+    /// Authentication credential manager.
     pub auth: Arc<AuthManager>,
+    /// Shared upstream HTTP client.
     pub upstream_client: Arc<UpstreamClient>,
+    /// Request and stream metrics.
     pub metrics: Arc<Metrics>,
 }
 
+/// Per-request context passed through the proxy pipeline.
 pub struct RequestCtx {
+    /// Unique identifier for this request.
     pub request_id: RequestId,
+    /// Timestamp when the request processing started.
     pub start: Instant,
 }
 
+/// Build the pingora HTTP proxy service from the given handler context.
 pub fn create_http_proxy_service(
     conf: &Arc<pingora_core::server::configuration::ServerConf>,
     ctx: CommandCodeProxy,

@@ -6,28 +6,48 @@ use std::path::PathBuf;
 /// Proxy configuration — all fields parsed from env or defaults.
 #[derive(Debug, Clone)]
 pub struct ProxyConfig {
+    /// Address and port to listen on (e.g. `127.0.0.1:18080`).
     pub listen_addr: String,
+    /// Upstream Command Code API base URL.
     pub upstream_url: String,
+    /// Default model when the client does not specify one.
     pub default_model: String,
+    /// Timeout in seconds for upstream requests.
     pub upstream_timeout_secs: u64,
+    /// Maximum number of retries for transient upstream failures.
     pub max_retries: u32,
+    /// Maximum concurrent upstream requests (0 = unlimited).
     pub max_concurrent: usize,
+    /// CORS `Access-Control-Allow-Origin` value.
     pub cors_origin: Option<String>,
+    /// Set of allowed model IDs (None = allow all).
     pub model_allowlist: Option<HashSet<String>>,
+    /// Directory containing `auth.json` and `config.json`.
     pub auth_dir: PathBuf,
+    /// How long to cache auth credentials before re-reading from disk.
     pub auth_cache_ttl_secs: u64,
+    /// Tracing log level (e.g. `info`, `debug`).
     pub log_level: String,
+    /// Maximum allowed request body size in bytes.
     pub max_body_size: usize,
+    /// Idle timeout in seconds before an SSE stream is closed.
     pub stream_idle_timeout_secs: u64,
+    /// Optional path to a log file for rotating log output.
     pub log_file: Option<PathBuf>,
+    /// Maximum size in bytes before the log file rotates.
     pub log_max_bytes: u64,
+    /// Number of rotated log files to keep.
     pub log_keep: usize,
+    /// Optional path to a TLS certificate file.
     pub tls_cert: Option<PathBuf>,
+    /// Optional path to a TLS private key file.
     pub tls_key: Option<PathBuf>,
+    /// Optional bearer token clients must present to access the proxy.
     pub incoming_token: Option<String>,
 }
 
 impl ProxyConfig {
+    /// Build a `ProxyConfig` by reading `COMMAND_CODE_*` environment variables.
     pub fn from_env() -> Result<Self, ConfigError> {
         let listen_host =
             env::var("COMMAND_CODE_PROXY_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
