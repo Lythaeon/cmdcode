@@ -181,6 +181,7 @@ model_list:
 | `COMMAND_CODE_PROXY_CORS` | (unset) | CORS origin header |
 | `COMMAND_CODE_PROXY_DEFAULT` | `xiaomi/mimo-v2.5` | Default model |
 | `COMMAND_CODE_PROXY_MODELS` | (unset) | Comma-separated model allowlist |
+| `COMMAND_CODE_AUTH_DIR` | `~/.commandcode` | Directory containing `auth.json` (override when auth lives elsewhere) |
 | `COMMAND_CODE_PROXY_LOG_FILE` | (unset) | Log file with size-based rotation |
 | `COMMAND_CODE_PROXY_LOG_MAX_BYTES` | `52428800` | Rotate after this many bytes |
 | `COMMAND_CODE_PROXY_LOG_KEEP` | `5` | Rotated log backups to keep |

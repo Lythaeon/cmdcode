@@ -135,11 +135,24 @@ pub fn get_model_catalog() -> &'static HashMap<ModelId, ModelMeta> {
 /// Try to find the CLI's bundled models.md (single-tenant only).
 fn find_models_md() -> Option<PathBuf> {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    let candidates = [
+    #[allow(unused_mut)]
+    let mut candidates: Vec<PathBuf> = vec![
+        // Linux: homebrew under ~/.linuxbrew or /home/linuxbrew, system npm
         home.join(".linuxbrew/lib/node_modules/command-code/dist/bundled/command-code-knowledge/reference/models.md"),
         PathBuf::from("/home/linuxbrew/.linuxbrew/lib/node_modules/command-code/dist/bundled/command-code-knowledge/reference/models.md"),
         PathBuf::from("/usr/local/lib/node_modules/command-code/dist/bundled/command-code-knowledge/reference/models.md"),
+        // npm user-global installs (e.g. nvm users honoring npm-prefix)
+        home.join(".npm-global/lib/node_modules/command-code/dist/bundled/command-code-knowledge/reference/models.md"),
+        // macOS (Intel) homebrew
+        home.join(".homebrew/lib/node_modules/command-code/dist/bundled/command-code-knowledge/reference/models.md"),
     ];
+    #[cfg(target_os = "windows")]
+    candidates.extend([
+        // Windows: npm global installs under %APPDATA%\npm
+        std::env::var("APPDATA").map(PathBuf::from).ok().unwrap_or_default()
+            .join("npm/node_modules/command-code/dist/bundled/command-code-knowledge/reference/models.md"),
+        home.join("AppData/Roaming/npm/node_modules/command-code/dist/bundled/command-code-knowledge/reference/models.md"),
+    ]);
 
     for path in &candidates {
         if path.exists() {
