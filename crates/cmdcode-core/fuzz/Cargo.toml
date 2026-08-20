@@ -73,3 +73,15 @@ name = "fuzz_model_effort"
 path = "fuzz_targets/fuzz_model_effort.rs"
 test = false
 bench = false
+
+[[bin]]
+name = "fuzz_auth_security"
+path = "fuzz_targets/fuzz_auth_security.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_errors"
+path = "fuzz_targets/fuzz_errors.rs"
+test = false
+bench = false

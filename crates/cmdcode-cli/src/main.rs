@@ -1,43 +1,25 @@
 //! Command Code OpenAI-compatible proxy server binary.
 
-use cmdcode_core::auth::AuthManager;
-use cmdcode_core::config::ProxyConfig;
-use cmdcode_server::logging::RotatingLog;
-use cmdcode_server::ProxyService;
+mod cli;
+mod commands;
 
-fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let config = ProxyConfig::from_env()?;
+use clap::Parser;
+use cli::{Cli, Commands};
 
-    // Init tracing
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&config.log_level));
+fn main() {
+    let cli = Cli::parse();
 
-    let fmt = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_target(false)
-        .with_thread_ids(true);
-
-    if let Some(ref log_file) = config.log_file {
-        let writer = RotatingLog::new(log_file.clone(), config.log_max_bytes, config.log_keep)?;
-        fmt.with_writer(writer).init();
-    } else {
-        fmt.init();
+    match cli.command {
+        Commands::Serve => {
+            if let Err(e) = commands::serve::run() {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Commands::Status => commands::status::run(),
+        Commands::Models => commands::models::run(),
+        Commands::Config => commands::config::run(),
+        Commands::Auth => commands::auth::run(),
+        Commands::Test => commands::test::run(),
     }
-
-    let auth = AuthManager::new(config.auth_dir.clone(), config.auth_cache_ttl_secs);
-
-    tracing::info!(
-        listen = %config.listen_addr,
-        upstream = %config.upstream_url,
-        timeout = config.upstream_timeout_secs,
-        retries = config.max_retries,
-        default_model = %config.default_model,
-        tls = config.tls_cert.is_some(),
-        auth_required = config.incoming_token.is_some(),
-        log_file = config.log_file.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "stdout".into()),
-        "starting cmdcode"
-    );
-
-    let service = ProxyService::new(config, auth);
-    service.run()
 }

@@ -203,10 +203,13 @@ impl AuthManager {
         headers.insert("Content-Type".into(), "application/json".into());
         headers.insert("User-Agent".into(), "cli".into());
         headers.insert("x-command-code-version".into(), "1.0.0".into());
-        headers.insert(
-            "x-cli-environment".into(),
-            std::env::var("COMMAND_CODE_ENV").unwrap_or_else(|_| "production".into()),
-        );
+        // F-8: Sanitize env var value to prevent header injection via CRLF.
+        let cli_env = std::env::var("COMMAND_CODE_ENV")
+            .unwrap_or_else(|_| "production".into())
+            .chars()
+            .filter(|c| *c != '\r' && *c != '\n')
+            .collect::<String>();
+        headers.insert("x-cli-environment".into(), cli_env);
         headers.insert("x-project-slug".into(), project_slug.into());
         headers.insert(
             "x-taste-learning".into(),
@@ -316,5 +319,243 @@ mod tests {
         assert_eq!(headers.get("User-Agent").unwrap(), "cli");
         assert!(headers.contains_key("x-session-id"));
         assert_eq!(headers.get("x-project-slug").unwrap(), "test");
+    }
+
+    // === Security-focused tests ===
+
+    #[tokio::test]
+    async fn test_auth_manager_invalid_json() {
+        let tmp = TempDir::new().unwrap();
+        let auth_dir = tmp.path().join(".commandcode");
+        std::fs::create_dir_all(&auth_dir).unwrap();
+        std::fs::write(auth_dir.join("auth.json"), r#"not json"#).unwrap();
+
+        let mgr = AuthManager::new(auth_dir, 30);
+        let err = mgr.get_auth_method().await.unwrap_err();
+        assert!(matches!(err, AuthError::InvalidJson { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_auth_manager_empty_api_key() {
+        let tmp = TempDir::new().unwrap();
+        let auth_dir = tmp.path().join(".commandcode");
+        std::fs::create_dir_all(&auth_dir).unwrap();
+        std::fs::write(auth_dir.join("auth.json"), r#"{"apiKey":""}"#).unwrap();
+
+        let mgr = AuthManager::new(auth_dir, 30);
+        // Empty API key is still returned as ApiKey("") - the proxy handles this
+        let method = mgr.get_auth_method().await.unwrap();
+        match method {
+            AuthMethod::ApiKey(k) => assert!(k.is_empty()),
+            _ => panic!("expected ApiKey"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_auth_manager_empty_oauth_token() {
+        let tmp = TempDir::new().unwrap();
+        let auth_dir = tmp.path().join(".commandcode");
+        std::fs::create_dir_all(&auth_dir).unwrap();
+        std::fs::write(auth_dir.join("auth.json"), r#"{"oauthToken":""}"#).unwrap();
+
+        let mgr = AuthManager::new(auth_dir, 30);
+        // Empty OAuth token is still returned as OAuth with empty token
+        let method = mgr.get_auth_method().await.unwrap();
+        match method {
+            AuthMethod::OAuth { token, .. } => assert!(token.is_empty()),
+            _ => panic!("expected OAuth"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_auth_manager_oauth_with_provider() {
+        let tmp = TempDir::new().unwrap();
+        let auth_dir = tmp.path().join(".commandcode");
+        std::fs::create_dir_all(&auth_dir).unwrap();
+        std::fs::write(
+            auth_dir.join("auth.json"),
+            r#"{"oauthToken":"tok123","oauthProvider":"github"}"#,
+        )
+        .unwrap();
+
+        let mgr = AuthManager::new(auth_dir, 30);
+        let method = mgr.get_auth_method().await.unwrap();
+        match method {
+            AuthMethod::OAuth { token, provider } => {
+                assert_eq!(token, "tok123");
+                assert_eq!(provider, "github");
+            }
+            _ => panic!("expected OAuth"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_auth_manager_oauth_without_provider() {
+        let tmp = TempDir::new().unwrap();
+        let auth_dir = tmp.path().join(".commandcode");
+        std::fs::create_dir_all(&auth_dir).unwrap();
+        std::fs::write(auth_dir.join("auth.json"), r#"{"oauthToken":"tok456"}"#).unwrap();
+
+        let mgr = AuthManager::new(auth_dir, 30);
+        let method = mgr.get_auth_method().await.unwrap();
+        match method {
+            AuthMethod::OAuth { token, provider } => {
+                assert_eq!(token, "tok456");
+                assert!(provider.is_empty());
+            }
+            _ => panic!("expected OAuth"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_auth_manager_invalidate_cache() {
+        let tmp = TempDir::new().unwrap();
+        let auth_dir = tmp.path().join(".commandcode");
+        std::fs::create_dir_all(&auth_dir).unwrap();
+        std::fs::write(auth_dir.join("auth.json"), r#"{"apiKey":"key1"}"#).unwrap();
+
+        let mgr = AuthManager::new(auth_dir.clone(), 60);
+        let _ = mgr.get_auth_method().await.unwrap();
+
+        // Invalidate and change file
+        mgr.invalidate_cache().await;
+        std::fs::write(auth_dir.join("auth.json"), r#"{"apiKey":"key2"}"#).unwrap();
+
+        let method = mgr.get_auth_method().await.unwrap();
+        match method {
+            AuthMethod::ApiKey(k) => assert_eq!(k, "key2"), // should see new key
+            _ => panic!("expected new key"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_build_headers_camel_case_aliases() {
+        let tmp = TempDir::new().unwrap();
+        let auth_dir = tmp.path().join(".commandcode");
+        std::fs::create_dir_all(&auth_dir).unwrap();
+        // Test camelCase JSON field aliases
+        std::fs::write(
+            auth_dir.join("auth.json"),
+            r#"{"apiKey":"key-camel","oauthToken":"tok-camel","oauthProvider":"gitlab","userId":"u1","userName":"test-user"}"#,
+        )
+        .unwrap();
+
+        let mgr = AuthManager::new(auth_dir, 30);
+        let headers = mgr.build_headers("/tmp/test").await.unwrap();
+        assert_eq!(headers.get("Authorization").unwrap(), "Bearer key-camel");
+    }
+
+    #[tokio::test]
+    async fn test_build_headers_config_file() {
+        let tmp = TempDir::new().unwrap();
+        let auth_dir = tmp.path().join(".commandcode");
+        std::fs::create_dir_all(&auth_dir).unwrap();
+        std::fs::write(auth_dir.join("auth.json"), r#"{"apiKey":"k"}"#).unwrap();
+        std::fs::write(
+            auth_dir.join("config.json"),
+            r#"{"tasteLearning":false,"oauthEnforced":true}"#,
+        )
+        .unwrap();
+
+        let mgr = AuthManager::new(auth_dir, 30);
+        let headers = mgr.build_headers("/tmp/test").await.unwrap();
+        assert_eq!(headers.get("x-taste-learning").unwrap(), "false");
+        assert_eq!(headers.get("x-co-flag").unwrap(), "true");
+    }
+
+    #[tokio::test]
+    async fn test_build_headers_missing_config_file() {
+        let tmp = TempDir::new().unwrap();
+        let auth_dir = tmp.path().join(".commandcode");
+        std::fs::create_dir_all(&auth_dir).unwrap();
+        std::fs::write(auth_dir.join("auth.json"), r#"{"apiKey":"k"}"#).unwrap();
+        // No config.json
+
+        let mgr = AuthManager::new(auth_dir, 30);
+        let headers = mgr.build_headers("/tmp/test").await.unwrap();
+        // Should use defaults
+        assert_eq!(headers.get("x-taste-learning").unwrap(), "true");
+        assert_eq!(headers.get("x-co-flag").unwrap(), "false");
+    }
+
+    #[tokio::test]
+    async fn test_build_headers_empty_project_slug() {
+        let tmp = TempDir::new().unwrap();
+        let auth_dir = tmp.path().join(".commandcode");
+        std::fs::create_dir_all(&auth_dir).unwrap();
+        std::fs::write(auth_dir.join("auth.json"), r#"{"apiKey":"k"}"#).unwrap();
+
+        let mgr = AuthManager::new(auth_dir, 30);
+        // Root path with no file_name
+        let headers = mgr.build_headers("/").await.unwrap();
+        assert_eq!(headers.get("x-project-slug").unwrap(), "unknown");
+    }
+
+    #[tokio::test]
+    async fn test_auth_data_parse_camel_case() {
+        let json = r#"{"apiKey":"ak","oauthToken":"ot","oauthProvider":"p","userId":"uid","userName":"un"}"#;
+        let auth: AuthData = serde_json::from_str(json).unwrap();
+        assert_eq!(auth.api_key.as_deref(), Some("ak"));
+        assert_eq!(auth.oauth_token.as_deref(), Some("ot"));
+        assert_eq!(auth.oauth_provider.as_deref(), Some("p"));
+        assert_eq!(auth.user_id.as_deref(), Some("uid"));
+        assert_eq!(auth.user_name.as_deref(), Some("un"));
+    }
+
+    #[tokio::test]
+    async fn test_auth_data_parse_snake_case() {
+        let json = r#"{"api_key":"ak","oauth_token":"ot","oauth_provider":"p","user_id":"uid","user_name":"un"}"#;
+        let auth: AuthData = serde_json::from_str(json).unwrap();
+        assert_eq!(auth.api_key.as_deref(), Some("ak"));
+        assert_eq!(auth.oauth_token.as_deref(), Some("ot"));
+        assert_eq!(auth.oauth_provider.as_deref(), Some("p"));
+        assert_eq!(auth.user_id.as_deref(), Some("uid"));
+        assert_eq!(auth.user_name.as_deref(), Some("un"));
+    }
+
+    #[tokio::test]
+    async fn test_auth_data_parse_empty() {
+        let json = r#"{}"#;
+        let auth: AuthData = serde_json::from_str(json).unwrap();
+        assert!(auth.api_key.is_none());
+        assert!(auth.oauth_token.is_none());
+        assert!(auth.oauth_provider.is_none());
+        assert!(auth.user_id.is_none());
+        assert!(auth.user_name.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_config_data_defaults() {
+        let config = ConfigData::default();
+        assert!(config.model.is_none());
+        assert!(config.taste_learning.is_none());
+        assert!(config.oauth_enforced.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_config_data_parse() {
+        let json = r#"{"model":"gpt-4","tasteLearning":false,"oauthEnforced":true}"#;
+        let config: ConfigData = serde_json::from_str(json).unwrap();
+        assert_eq!(config.model.as_deref(), Some("gpt-4"));
+        assert_eq!(config.taste_learning, Some(false));
+        assert_eq!(config.oauth_enforced, Some(true));
+    }
+
+    // === Path traversal tests ===
+
+    #[tokio::test]
+    async fn test_auth_manager_special_characters_in_path() {
+        let tmp = TempDir::new().unwrap();
+        let auth_dir = tmp.path().join(".commandcode");
+        std::fs::create_dir_all(&auth_dir).unwrap();
+        std::fs::write(auth_dir.join("auth.json"), r#"{"apiKey":"k"}"#).unwrap();
+
+        // Path with special characters should work
+        let mgr = AuthManager::new(auth_dir, 30);
+        let headers = mgr
+            .build_headers("/path/with spaces/and-special@chars")
+            .await
+            .unwrap();
+        assert_eq!(headers.get("x-project-slug").unwrap(), "and-special@chars");
     }
 }

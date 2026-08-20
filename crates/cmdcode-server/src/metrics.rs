@@ -37,6 +37,8 @@ pub struct Metrics {
     pub skipped_events: AtomicU64,
     /// Streams that ended with truncated data.
     pub truncated_streams: AtomicU64,
+    /// Streams that completed with zero content chunks (empty upstream response).
+    pub empty_streams: AtomicU64,
     /// Number of streams currently open.
     pub active_streams: AtomicI64,
     started_at: SystemTime,
@@ -67,6 +69,7 @@ impl Metrics {
             upstream_timeouts: AtomicU64::new(0),
             skipped_events: AtomicU64::new(0),
             truncated_streams: AtomicU64::new(0),
+            empty_streams: AtomicU64::new(0),
             active_streams: AtomicI64::new(0),
             started_at: SystemTime::now(),
         }
@@ -146,6 +149,11 @@ impl Metrics {
     /// Increment the truncated streams counter.
     pub fn inc_truncated_stream(&self) {
         self.truncated_streams.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Increment the empty streams counter.
+    pub fn inc_empty_stream(&self) {
+        self.empty_streams.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Increment the active streams gauge.
@@ -293,6 +301,13 @@ impl Metrics {
         );
         line(
             &mut out,
+            "Streams completed with zero content chunks.",
+            "cmdcode_empty_streams_total",
+            self.empty_streams.load(Ordering::Relaxed).to_string(),
+            "counter",
+        );
+        line(
+            &mut out,
             "Streams currently open.",
             "cmdcode_active_streams",
             self.active_streams.load(Ordering::Relaxed).to_string(),
@@ -335,6 +350,7 @@ mod tests {
             "cmdcode_upstream_timeouts_total",
             "cmdcode_skipped_events_total",
             "cmdcode_truncated_streams_total",
+            "cmdcode_empty_streams_total",
             "cmdcode_active_streams",
             "cmdcode_uptime_seconds",
         ] {

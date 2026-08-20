@@ -173,6 +173,225 @@ impl ContextWindow {
     }
 }
 
+impl fmt::Display for ContextWindow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0 >= 1_000_000 {
+            write!(f, "{}M", self.0 / 1_000_000)
+        } else if self.0 >= 1_000 {
+            write!(f, "{}K", self.0 / 1_000)
+        } else {
+            write!(f, "{}", self.0)
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_model_id_new() {
+        let id = ModelId::new("test-model");
+        assert_eq!(id.as_str(), "test-model");
+    }
+
+    #[test]
+    fn test_model_id_display() {
+        let id = ModelId::new("gpt-4");
+        assert_eq!(format!("{id}"), "gpt-4");
+    }
+
+    #[test]
+    fn test_model_id_as_ref() {
+        let id = ModelId::new("claude-3");
+        let s: &str = id.as_ref();
+        assert_eq!(s, "claude-3");
+    }
+
+    #[test]
+    fn test_model_id_strip_prefix_with_prefix() {
+        let id = ModelId::new("command-code/gpt-4");
+        let stripped = id.strip_prefix();
+        assert_eq!(stripped.as_str(), "gpt-4");
+    }
+
+    #[test]
+    fn test_model_id_strip_prefix_without_prefix() {
+        let id = ModelId::new("gpt-4");
+        let stripped = id.strip_prefix();
+        assert_eq!(stripped.as_str(), "gpt-4");
+    }
+
+    #[test]
+    fn test_effort_from_str_opt() {
+        assert_eq!(Effort::from_str_opt("low"), Some(Effort::Low));
+        assert_eq!(Effort::from_str_opt("medium"), Some(Effort::Medium));
+        assert_eq!(Effort::from_str_opt("high"), Some(Effort::High));
+        assert_eq!(Effort::from_str_opt("xhigh"), Some(Effort::Xhigh));
+        assert_eq!(Effort::from_str_opt("max"), Some(Effort::Max));
+        assert_eq!(Effort::from_str_opt("invalid"), None);
+        assert_eq!(Effort::from_str_opt(""), None);
+        assert_eq!(Effort::from_str_opt("LOW"), Some(Effort::Low));
+        assert_eq!(Effort::from_str_opt("High"), Some(Effort::High));
+    }
+
+    #[test]
+    fn test_effort_as_str() {
+        assert_eq!(Effort::Low.as_str(), "low");
+        assert_eq!(Effort::Medium.as_str(), "medium");
+        assert_eq!(Effort::High.as_str(), "high");
+        assert_eq!(Effort::Xhigh.as_str(), "xhigh");
+        assert_eq!(Effort::Max.as_str(), "max");
+    }
+
+    #[test]
+    fn test_effort_display() {
+        assert_eq!(format!("{}", Effort::Low), "low");
+        assert_eq!(format!("{}", Effort::High), "high");
+    }
+
+    #[test]
+    fn test_parse_model_and_effort_basic() {
+        let (model, effort) = parse_model_and_effort("gpt-4");
+        assert_eq!(model.as_str(), "gpt-4");
+        assert!(effort.is_none());
+    }
+
+    #[test]
+    fn test_parse_model_and_effort_with_effort() {
+        let (model, effort) = parse_model_and_effort("gpt-4:high");
+        assert_eq!(model.as_str(), "gpt-4");
+        assert_eq!(effort, Some(Effort::High));
+    }
+
+    #[test]
+    fn test_parse_model_and_effort_with_prefix() {
+        let (model, effort) = parse_model_and_effort("command-code/gpt-4:max");
+        assert_eq!(model.as_str(), "gpt-4");
+        assert_eq!(effort, Some(Effort::Max));
+    }
+
+    #[test]
+    fn test_parse_model_and_effort_invalid_effort() {
+        let (model, effort) = parse_model_and_effort("gpt-4:invalid");
+        assert_eq!(model.as_str(), "gpt-4:invalid");
+        assert!(effort.is_none());
+    }
+
+    #[test]
+    fn test_parse_model_and_effort_empty() {
+        let (model, effort) = parse_model_and_effort("");
+        assert_eq!(model.as_str(), "");
+        assert!(effort.is_none());
+    }
+
+    #[test]
+    fn test_session_id_generate() {
+        let id = SessionId::generate();
+        assert!(!id.as_str().is_empty());
+        // UUID v4 format: 8-4-4-4-12
+        assert_eq!(id.as_str().chars().filter(|c| *c == '-').count(), 4);
+    }
+
+    #[test]
+    fn test_session_id_unique() {
+        let id1 = SessionId::generate();
+        let id2 = SessionId::generate();
+        assert_ne!(id1.as_str(), id2.as_str());
+    }
+
+    #[test]
+    fn test_request_id_generate() {
+        let id = RequestId::generate();
+        assert!(!id.as_str().is_empty());
+        // Hex-encoded u128: up to 32 chars (leading zeros may be omitted)
+        assert!(id.as_str().len() <= 32);
+        // Must be valid hex
+        assert!(id.as_str().chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_request_id_unique() {
+        let id1 = RequestId::generate();
+        let id2 = RequestId::generate();
+        assert_ne!(id1.as_str(), id2.as_str());
+    }
+
+    #[test]
+    fn test_provider_id_new() {
+        let id = ProviderId::new("openai");
+        assert_eq!(id.as_str(), "openai");
+    }
+
+    #[test]
+    fn test_provider_id_display() {
+        let id = ProviderId::new("anthropic");
+        assert_eq!(format!("{id}"), "anthropic");
+    }
+
+    #[test]
+    fn test_context_window_new() {
+        let cw = ContextWindow::new(1000);
+        assert_eq!(cw.as_u64(), 1000);
+    }
+
+    #[test]
+    fn test_context_window_display() {
+        assert_eq!(format!("{}", ContextWindow::new(500)), "500");
+        assert_eq!(format!("{}", ContextWindow::new(1500)), "1K");
+        assert_eq!(format!("{}", ContextWindow::new(1_500_000)), "1M");
+        assert_eq!(format!("{}", ContextWindow::new(0)), "0");
+    }
+
+    #[test]
+    fn test_finish_reason_from_upstream() {
+        assert_eq!(FinishReason::from_upstream("stop"), FinishReason::Stop);
+        assert_eq!(
+            FinishReason::from_upstream("tool_use"),
+            FinishReason::ToolCalls
+        );
+        assert_eq!(
+            FinishReason::from_upstream("tool-calls"),
+            FinishReason::ToolCalls
+        );
+        assert_eq!(
+            FinishReason::from_upstream("tool_calls"),
+            FinishReason::ToolCalls
+        );
+        assert_eq!(FinishReason::from_upstream("length"), FinishReason::Length);
+        assert_eq!(
+            FinishReason::from_upstream("max_tokens"),
+            FinishReason::Length
+        );
+        assert_eq!(FinishReason::from_upstream("unknown"), FinishReason::Stop);
+        assert_eq!(FinishReason::from_upstream(""), FinishReason::Stop);
+    }
+
+    #[test]
+    fn test_finish_reason_display() {
+        assert_eq!(format!("{}", FinishReason::Stop), "stop");
+        assert_eq!(format!("{}", FinishReason::ToolCalls), "tool_calls");
+        assert_eq!(format!("{}", FinishReason::Length), "length");
+    }
+
+    #[test]
+    fn test_model_meta_creation() {
+        let meta = ModelMeta {
+            name: "GPT-4".into(),
+            reasoning: true,
+            efforts: vec![Effort::Low, Effort::High],
+            context_window: ContextWindow::new(8192),
+            provider: ProviderId::new("openai"),
+        };
+        assert_eq!(meta.name, "GPT-4");
+        assert!(meta.reasoning);
+        assert_eq!(meta.efforts.len(), 2);
+        assert_eq!(meta.context_window.as_u64(), 8192);
+        assert_eq!(meta.provider.as_str(), "openai");
+    }
+}
+
 /// Model metadata — parsed from CLI bundled models.md.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelMeta {

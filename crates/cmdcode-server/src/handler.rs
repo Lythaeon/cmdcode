@@ -10,8 +10,9 @@ use std::time::Instant;
 use cmdcode_core::auth::AuthManager;
 use cmdcode_core::config::ProxyConfig;
 use cmdcode_core::model_catalog::get_model_catalog;
-use cmdcode_core::types::RequestId;
+use cmdcode_core::types::{Effort, ModelId, RequestId};
 use cmdcode_core::wire_format::ChatCompletionRequest;
+use tokio_util::sync::CancellationToken;
 
 use crate::metrics::Metrics;
 use crate::upstream::{self, UpstreamClient};
@@ -110,12 +111,17 @@ impl ProxyHttp for CommandCodeProxy {
             let mut resp = pingora_http::ResponseHeader::build(204, None)?;
             resp.insert_header("content-type", "text/plain")?;
             if let Some(ref origin) = self.config.cors_origin {
-                resp.insert_header("access-control-allow-origin", origin.as_str())?;
-                resp.insert_header("access-control-allow-methods", "GET, POST, OPTIONS")?;
-                resp.insert_header(
-                    "access-control-allow-headers",
-                    "Content-Type, Authorization",
-                )?;
+                // F-4: Validate origin is a valid URL scheme (not a regex or wildcard)
+                // to prevent CORS bypass via crafted origin strings.
+                if origin == "*" || origin.starts_with("http://") || origin.starts_with("https://")
+                {
+                    resp.insert_header("access-control-allow-origin", origin.as_str())?;
+                    resp.insert_header("access-control-allow-methods", "GET, POST, OPTIONS")?;
+                    resp.insert_header(
+                        "access-control-allow-headers",
+                        "Content-Type, Authorization",
+                    )?;
+                }
             }
             session.write_response_header(Box::new(resp), true).await?;
             return Ok(true);
@@ -256,98 +262,9 @@ impl ProxyHttp for CommandCodeProxy {
                 self.send_json(session, 200, &completion).await?;
                 Ok(true)
             }
-            Ok(upstream::UpstreamResponse::Sse { mut rx, cancel }) => {
-                tracing::info!(
-                    request_id = %ctx.request_id.as_str(),
-                    elapsed_ms = start.elapsed().as_millis() as u64,
-                    "starting stream"
-                );
-                self.metrics.stream_started();
-
-                let mut resp = pingora_http::ResponseHeader::build(200, None)?;
-                resp.insert_header("content-type", "text/event-stream")?;
-                resp.insert_header("cache-control", "no-cache")?;
-                resp.insert_header("connection", "keep-alive")?;
-                // If the header write fails (client already gone), we must still
-                // decrement active_streams below — so don't `?`-propagate here.
-                let header_ok = session
-                    .write_response_header(Box::new(resp), false)
+            Ok(upstream::UpstreamResponse::Sse { rx, cancel }) => {
+                self.handle_sse_stream(session, rx, cancel, &model, &body, effort, start)
                     .await
-                    .is_ok();
-
-                let idle_timeout =
-                    std::time::Duration::from_secs(self.config.stream_idle_timeout_secs);
-                let mut chunks = 0u32;
-                let mut bytes_out = 0usize;
-                let mut client_gone = !header_ok;
-                let mut abort = false;
-                if header_ok {
-                    loop {
-                        let recv = tokio::time::timeout(idle_timeout, rx.recv()).await;
-                        match recv {
-                            Ok(Some(Ok(line))) => {
-                                if let Err(e) = session
-                                    .write_response_body(Some(Bytes::from(line.clone())), false)
-                                    .await
-                                {
-                                    if is_client_disconnect(&e) {
-                                        tracing::warn!(request_id = %ctx.request_id.as_str(), "client disconnected; aborting stream");
-                                        self.metrics.inc_client_disconnect();
-                                    } else {
-                                        tracing::warn!(request_id = %ctx.request_id.as_str(), error = %e, "non-disconnect write error; aborting stream");
-                                    }
-                                    client_gone = true;
-                                    break;
-                                }
-                                chunks += 1;
-                                bytes_out += line.len();
-                            }
-                            Ok(Some(Err(e))) => {
-                                tracing::error!(request_id = %ctx.request_id.as_str(), error = %e, "stream error");
-                                self.metrics.inc_error();
-                                abort = true;
-                                break;
-                            }
-                            Ok(None) => break,
-                            Err(_) => {
-                                self.metrics.inc_upstream_timeout();
-                                tracing::error!(
-                                    request_id = %ctx.request_id.as_str(),
-                                    idle_secs = idle_timeout.as_secs(),
-                                    "stream idle timeout; aborting"
-                                );
-                                abort = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                // If we are not ending the stream naturally (the upstream task
-                // already sent [DONE] and closed the channel), signal its
-                // cancellation so it drops the reqwest connection and releases
-                // the concurrency permit immediately instead of waiting on
-                // Command Code to produce more data.
-                if client_gone || abort {
-                    cancel.cancel();
-                }
-
-                if !client_gone {
-                    // Best-effort terminator write; a failure here must not
-                    // skip stream_finished() (active_streams would drift).
-                    let _ = session.write_response_body(None, true).await;
-                }
-                self.metrics.inc_chunks(chunks);
-                self.metrics.inc_bytes_out(bytes_out);
-                self.metrics.stream_finished();
-
-                tracing::info!(
-                    request_id = %ctx.request_id.as_str(),
-                    elapsed_ms = start.elapsed().as_millis() as u64,
-                    chunks = chunks,
-                    "completed (stream)"
-                );
-                Ok(true)
             }
             Err(e) => {
                 self.metrics.inc_error();
@@ -388,6 +305,250 @@ fn is_client_disconnect(e: &pingora_error::Error) -> bool {
 }
 
 impl CommandCodeProxy {
+    /// Stream an SSE response to the client, retrying empty upstream streams.
+    ///
+    /// The upstream occasionally accepts a `/alpha/generate` request, emits a
+    /// bare `{"type":"start"}` line, then closes the stream with no content and
+    /// no `finish` event. The official CLI treats exactly that as a transient
+    /// failure and re-invokes the endpoint with backoff (`callModelWithRetry`).
+    /// Mirror it here: we hold off writing the 200 SSE header until the first
+    /// real chunk arrives, and if a stream closes empty we re-call the upstream
+    /// (up to `max_retries` times) before surfacing an error to the client.
+    #[allow(clippy::too_many_arguments)]
+    async fn handle_sse_stream(
+        &self,
+        session: &mut Session,
+        mut rx: tokio::sync::mpsc::Receiver<Result<String, String>>,
+        mut cancel: CancellationToken,
+        model: &ModelId,
+        body: &ChatCompletionRequest,
+        effort: Option<Effort>,
+        start: std::time::Instant,
+    ) -> PingoraResult<bool> {
+        tracing::info!(
+            elapsed_ms = start.elapsed().as_millis() as u64,
+            "starting stream"
+        );
+        self.metrics.stream_started();
+
+        let idle_timeout = std::time::Duration::from_secs(self.config.stream_idle_timeout_secs);
+        let max_attempts = 1 + self.config.max_retries;
+
+        // Wait for the first chunk before committing the 200 SSE header. An
+        // upstream that closes immediately (only sent {"type":"start"}, or
+        // nothing at all) makes rx close with None — that is our retry trigger.
+        let mut first_chunk: Option<String> = None;
+        let mut abort = false;
+        let mut attempts = 0u32;
+        while first_chunk.is_none() && !abort && attempts < max_attempts {
+            match tokio::time::timeout(idle_timeout, rx.recv()).await {
+                Ok(Some(Ok(line))) => {
+                    // translate_line above already drops the "start"/session
+                    // markers and other no-content events, so the first line we
+                    // see here is real content, a finish chunk, or an error.
+                    first_chunk = Some(line);
+                }
+                Ok(Some(Err(e))) => {
+                    tracing::error!(error = %e, "upstream stream error before first chunk");
+                    self.metrics.inc_error();
+                    cancel.cancel();
+                    abort = true;
+                }
+                Ok(None) => {
+                    // Empty upstream stream: no content, no finish. The CLI
+                    // treats this as transient and retries.
+                    self.metrics.inc_empty_stream();
+                    cancel.cancel();
+                    attempts += 1;
+                    if attempts >= max_attempts {
+                        tracing::warn!(
+                            attempts = attempts,
+                            "empty upstream stream after all retries"
+                        );
+                        let err = serde_json::json!({
+                            "error": {
+                                "message": "upstream returned an empty stream (no content, no finish event)",
+                                "type": "upstream_empty"
+                            }
+                        });
+                        self.send_json(session, 502, &err).await?;
+                        self.metrics.stream_finished();
+                        return Ok(true);
+                    }
+                    let backoff = std::time::Duration::from_millis(100 * 2u64.pow(attempts));
+                    tracing::warn!(
+                        attempt = attempts,
+                        backoff_ms = backoff.as_millis(),
+                        "empty upstream stream; retrying"
+                    );
+                    tokio::time::sleep(backoff).await;
+                    match self
+                        .upstream_client
+                        .forward_request(model, body, effort)
+                        .await
+                    {
+                        Ok(upstream::UpstreamResponse::Sse {
+                            rx: nrx,
+                            cancel: ncan,
+                        }) => {
+                            rx = nrx;
+                            cancel = ncan;
+                        }
+                        Ok(_) => {
+                            tracing::warn!("unexpected non-stream response on retry");
+                            cancel.cancel();
+                            abort = true;
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "upstream error on stream retry");
+                            self.metrics.inc_error();
+                            if matches!(e, cmdcode_core::error::UpstreamError::Timeout { .. }) {
+                                self.metrics.inc_upstream_timeout();
+                            }
+                            let status = match &e {
+                                cmdcode_core::error::UpstreamError::ConnectionRefused {
+                                    ..
+                                } => 502,
+                                cmdcode_core::error::UpstreamError::ConnectionReset => 502,
+                                cmdcode_core::error::UpstreamError::Timeout { .. } => 504,
+                                cmdcode_core::error::UpstreamError::HttpError {
+                                    status, ..
+                                } => *status,
+                                _ => 502,
+                            };
+                            let err = serde_json::json!({
+                                "error": {
+                                    "message": e.to_string(),
+                                    "type": "upstream_error"
+                                }
+                            });
+                            self.send_json(session, status, &err).await?;
+                            self.metrics.stream_finished();
+                            return Ok(true);
+                        }
+                    }
+                }
+                Err(_) => {
+                    self.metrics.inc_upstream_timeout();
+                    tracing::error!(
+                        idle_secs = idle_timeout.as_secs(),
+                        "stream idle timeout before first chunk; aborting"
+                    );
+                    cancel.cancel();
+                    abort = true;
+                }
+            }
+        }
+
+        // First-chunk fetch failed (aborted or timed out) — surface an error.
+        let Some(first) = first_chunk else {
+            cancel.cancel();
+            self.metrics.inc_empty_stream();
+            tracing::warn!(
+                elapsed_ms = start.elapsed().as_millis() as u64,
+                "stream closed before any content; terminating"
+            );
+            let err = serde_json::json!({
+                "error": {
+                    "message": "upstream returned an empty stream (no content, no finish event)",
+                    "type": "upstream_empty"
+                }
+            });
+            self.send_json(session, 502, &err).await?;
+            self.metrics.stream_finished();
+            return Ok(true);
+        };
+
+        // Write the 200 SSE header now — we have real content.
+        let mut resp = pingora_http::ResponseHeader::build(200, None)?;
+        resp.insert_header("content-type", "text/event-stream")?;
+        resp.insert_header("cache-control", "no-cache")?;
+        resp.insert_header("connection", "keep-alive")?;
+        let header_ok = session
+            .write_response_header(Box::new(resp), false)
+            .await
+            .is_ok();
+
+        let mut chunks = 0u32;
+        let mut bytes_out = 0usize;
+        let mut client_gone = !header_ok;
+        if !client_gone {
+            // First chunk.
+            let first_len = first.len();
+            if let Err(e) = session
+                .write_response_body(Some(Bytes::from(first)), false)
+                .await
+            {
+                if is_client_disconnect(&e) {
+                    tracing::warn!("client disconnected; aborting stream");
+                    self.metrics.inc_client_disconnect();
+                } else {
+                    tracing::warn!(error = %e, "non-disconnect write error; aborting stream");
+                }
+                client_gone = true;
+            } else {
+                chunks += 1;
+                bytes_out += first_len;
+            }
+
+            // Stream the rest.
+            while !client_gone {
+                match tokio::time::timeout(idle_timeout, rx.recv()).await {
+                    Ok(Some(Ok(line))) => {
+                        if let Err(e) = session
+                            .write_response_body(Some(Bytes::from(line.clone())), false)
+                            .await
+                        {
+                            if is_client_disconnect(&e) {
+                                tracing::warn!("client disconnected; aborting stream");
+                                self.metrics.inc_client_disconnect();
+                            } else {
+                                tracing::warn!(error=%e,"non-disconnect write error; aborting stream");
+                            }
+                            client_gone = true;
+                        } else {
+                            chunks += 1;
+                            bytes_out += line.len();
+                        }
+                    }
+                    Ok(Some(Err(e))) => {
+                        tracing::error!(error = %e, "stream error");
+                        self.metrics.inc_error();
+                        abort = true;
+                        break;
+                    }
+                    Ok(None) => break,
+                    Err(_) => {
+                        self.metrics.inc_upstream_timeout();
+                        tracing::error!(
+                            idle_secs = idle_timeout.as_secs(),
+                            "stream idle timeout; aborting"
+                        );
+                        abort = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if client_gone || abort {
+            cancel.cancel();
+        }
+        if !client_gone {
+            let _ = session.write_response_body(None, true).await;
+        }
+        self.metrics.inc_chunks(chunks);
+        self.metrics.inc_bytes_out(bytes_out);
+        self.metrics.stream_finished();
+
+        tracing::info!(
+            elapsed_ms = start.elapsed().as_millis() as u64,
+            chunks = chunks,
+            "completed (stream)"
+        );
+        Ok(true)
+    }
+
     async fn handle_models(&self, session: &mut Session) -> PingoraResult<()> {
         let catalog = get_model_catalog();
         let models: Vec<serde_json::Value> = catalog
@@ -445,12 +606,15 @@ impl CommandCodeProxy {
         let mut resp = pingora_http::ResponseHeader::build(status, None)?;
         resp.insert_header("content-type", "application/json")?;
         if let Some(ref origin) = self.config.cors_origin {
-            resp.insert_header("access-control-allow-origin", origin.as_str())?;
-            resp.insert_header("access-control-allow-methods", "GET, POST, OPTIONS")?;
-            resp.insert_header(
-                "access-control-allow-headers",
-                "Content-Type, Authorization",
-            )?;
+            // F-4: Validate origin is a valid URL scheme
+            if origin == "*" || origin.starts_with("http://") || origin.starts_with("https://") {
+                resp.insert_header("access-control-allow-origin", origin.as_str())?;
+                resp.insert_header("access-control-allow-methods", "GET, POST, OPTIONS")?;
+                resp.insert_header(
+                    "access-control-allow-headers",
+                    "Content-Type, Authorization",
+                )?;
+            }
         }
         session.write_response_header(Box::new(resp), false).await?;
 
@@ -484,13 +648,18 @@ impl CommandCodeProxy {
 /// Constant-time string comparison. On length mismatch this still leaks the
 /// length, which is inherent to fixed-length bearer-token checks.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
+    // Pad both to the same length to avoid length leak via timing.
+    // Use the longer length so short tokens don't reveal their length
+    // by comparing against zero-padded expected token.
+    let max_len = a.len().max(b.len());
     let mut diff: u8 = 0;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
+    for i in 0..max_len {
+        let a_val = a.get(i).copied().unwrap_or(0);
+        let b_val = b.get(i).copied().unwrap_or(0);
+        diff |= a_val ^ b_val;
     }
+    // Also check that lengths match (constant-time)
+    diff |= (a.len() ^ b.len()) as u8;
     diff == 0
 }
 
@@ -514,5 +683,19 @@ mod tests {
     #[test]
     fn test_constant_time_eq_empty() {
         assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn test_constant_time_eq_different_lengths() {
+        // F-3 fix: different lengths should still return false
+        assert!(!constant_time_eq(b"short", b"longer-token"));
+        assert!(!constant_time_eq(b"a", b"ab"));
+        assert!(!constant_time_eq(b"ab", b"a"));
+    }
+
+    #[test]
+    fn test_constant_time_eq_same_length_different_content() {
+        assert!(!constant_time_eq(b"abcdef", b"abcdeg"));
+        assert!(!constant_time_eq(b"000000", b"000001"));
     }
 }

@@ -1309,6 +1309,58 @@ async fn test_chaos_through_proxy_trickle_stream() {
 }
 
 #[tokio::test]
+async fn test_chaos_through_proxy_oversized_line_skipped_not_aborted() {
+    // Regression: the upstream `start-step` event echoes the full request
+    // (tools + messages) on a single NDJSON line, which can exceed
+    // MAX_STREAM_BUFFER (1 MiB). Previously the proxy aborted the whole
+    // stream when the unconsumed buffer exceeded the cap, so large requests
+    // (e.g. opencode sessions with many tools) came back empty. Now an
+    // oversized single line must be skipped and the real events after it
+    // must still be translated.
+    let mut events = Vec::new();
+    // A giant start-step echoing a big request (tool schemas + messages).
+    let big_request = serde_json::json!({
+        "body": {
+            "tools": (0..5000).map(|i| serde_json::json!({
+                "type": "function",
+                "name": format!("tool_{}", i),
+                "description": "x".repeat(300),
+                "inputSchema": {"type": "object", "properties": {}}
+            })).collect::<Vec<_>>(),
+            "messages": vec![serde_json::json!({"role":"user","content":"y".repeat(200)})],
+        }
+    });
+    events.push(serde_json::json!({
+        "type": "start-step",
+        "request": big_request,
+        "warnings": []
+    }));
+    events.push(serde_json::json!({"type": "reasoning-delta", "text": "reasoning"}));
+    events.push(serde_json::json!({"type": "text-delta", "text": "payload-after-big-line"}));
+    events.push(serde_json::json!({"type": "finish", "finishReason": "stop", "totalUsage": {"inputTokens": 1, "outputTokens": 1, "inputTokenDetails": {}}}));
+    let mock = MockUpstream {
+        events,
+        ..MockUpstream::normal()
+    };
+    let mock_addr = mock.start().await;
+    let proxy = start_proxy(mock_addr, 0, 180).await;
+
+    let (status, body) = proxy_chat(&proxy, CHAT_BODY).await;
+    assert_eq!(
+        status, 200,
+        "oversized start-step line must not abort the stream"
+    );
+    assert!(
+        body.contains("payload-after-big-line"),
+        "chunk after the oversized line must still be delivered"
+    );
+    assert!(
+        body.contains("[DONE]"),
+        "stream must end cleanly after skipping the oversized line"
+    );
+}
+
+#[tokio::test]
 async fn test_chaos_through_proxy_idle_timeout_abort() {
     let mock = MockUpstream {
         events: vec![

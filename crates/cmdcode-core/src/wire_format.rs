@@ -1050,4 +1050,644 @@ mod tests {
             "unparseable args must stay a string"
         );
     }
+
+    // === Additional wire_format tests ===
+
+    #[test]
+    fn test_wire_tools_empty() {
+        let tools = vec![];
+        let result = wire_tools(&tools);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_wire_tools_non_function_type() {
+        let tools = vec![OpenAiTool {
+            tool_type: "custom".into(),
+            function: None,
+            name: Some("my_tool".into()),
+            description: Some("A custom tool".into()),
+            input_schema: Some(serde_json::json!({"type": "object"})),
+            parameters: None,
+        }];
+
+        let result = wire_tools(&tools);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "my_tool");
+        assert_eq!(result[0].description, "A custom tool");
+    }
+
+    #[test]
+    fn test_wire_tools_function_without_function_field() {
+        let tools = vec![OpenAiTool {
+            tool_type: "function".into(),
+            function: None,
+            name: Some("fallback_name".into()),
+            description: Some("desc".into()),
+            input_schema: None,
+            parameters: Some(serde_json::json!({"type": "object"})),
+        }];
+
+        let result = wire_tools(&tools);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "fallback_name");
+    }
+
+    #[test]
+    fn test_wire_messages_empty() {
+        let messages = vec![];
+        let wire = wire_messages(&messages);
+        assert!(wire.is_empty());
+    }
+
+    #[test]
+    fn test_wire_messages_all_system() {
+        let messages = vec![
+            OpenAiMessage {
+                role: "system".into(),
+                content: Some(serde_json::Value::String("System 1".into())),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+            OpenAiMessage {
+                role: "system".into(),
+                content: Some(serde_json::Value::String("System 2".into())),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+        ];
+
+        let wire = wire_messages(&messages);
+        // All system messages should be dropped
+        assert!(wire.is_empty());
+    }
+
+    #[test]
+    fn test_wire_messages_unknown_role() {
+        let messages = vec![OpenAiMessage {
+            role: "unknown_role".into(),
+            content: Some(serde_json::Value::String("content".into())),
+            tool_call_id: None,
+            tool_calls: None,
+        }];
+
+        let wire = wire_messages(&messages);
+        // Unknown roles fall back to User
+        assert_eq!(wire.len(), 1);
+        match &wire[0] {
+            CcMessage::User { content } => {
+                assert_eq!(content.len(), 1);
+            }
+            _ => panic!("expected user message for unknown role"),
+        }
+    }
+
+    #[test]
+    fn test_wire_messages_assistant_with_content_array() {
+        let messages = vec![OpenAiMessage {
+            role: "assistant".into(),
+            content: Some(serde_json::json!([
+                {"type": "text", "text": "Hello"},
+                {"type": "text", "text": "World"}
+            ])),
+            tool_call_id: None,
+            tool_calls: None,
+        }];
+
+        let wire = wire_messages(&messages);
+        assert_eq!(wire.len(), 1);
+        match &wire[0] {
+            CcMessage::Assistant { content } => {
+                assert_eq!(content.len(), 2);
+            }
+            _ => panic!("expected assistant message"),
+        }
+    }
+
+    #[test]
+    fn test_wire_messages_assistant_with_string_content() {
+        let messages = vec![OpenAiMessage {
+            role: "assistant".into(),
+            content: Some(serde_json::Value::String("Simple text".into())),
+            tool_call_id: None,
+            tool_calls: None,
+        }];
+
+        let wire = wire_messages(&messages);
+        assert_eq!(wire.len(), 1);
+        match &wire[0] {
+            CcMessage::Assistant { content } => {
+                assert_eq!(content.len(), 1);
+                match &content[0] {
+                    CcContentItem::Text { text } => assert_eq!(text, "Simple text"),
+                    _ => panic!("expected text"),
+                }
+            }
+            _ => panic!("expected assistant message"),
+        }
+    }
+
+    #[test]
+    fn test_wire_messages_user_with_content_array() {
+        let messages = vec![OpenAiMessage {
+            role: "user".into(),
+            content: Some(serde_json::json!([
+                {"type": "text", "text": "What's in this image?"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}}
+            ])),
+            tool_call_id: None,
+            tool_calls: None,
+        }];
+
+        let wire = wire_messages(&messages);
+        assert_eq!(wire.len(), 1);
+        match &wire[0] {
+            CcMessage::User { content } => {
+                assert_eq!(content.len(), 2);
+                match &content[0] {
+                    CcContentItem::Text { text } => assert_eq!(text, "What's in this image?"),
+                    _ => panic!("expected text"),
+                }
+                match &content[1] {
+                    CcContentItem::Image { image, mime_type } => {
+                        assert_eq!(image, "https://example.com/img.png");
+                        assert_eq!(mime_type, "image/png");
+                    }
+                    _ => panic!("expected image"),
+                }
+            }
+            _ => panic!("expected user message"),
+        }
+    }
+
+    #[test]
+    fn test_wire_messages_user_with_new_image_format() {
+        let messages = vec![OpenAiMessage {
+            role: "user".into(),
+            content: Some(serde_json::json!([
+                {"type": "text", "text": "Describe"},
+                {"type": "image", "image": "data:image/jpeg;base64,abc", "mimeType": "image/jpeg"}
+            ])),
+            tool_call_id: None,
+            tool_calls: None,
+        }];
+
+        let wire = wire_messages(&messages);
+        match &wire[0] {
+            CcMessage::User { content } => match &content[1] {
+                CcContentItem::Image { image, mime_type } => {
+                    assert_eq!(image, "data:image/jpeg;base64,abc");
+                    assert_eq!(mime_type, "image/jpeg");
+                }
+                _ => panic!("expected image"),
+            },
+            _ => panic!("expected user message"),
+        }
+    }
+
+    #[test]
+    fn test_wire_messages_tool_result() {
+        let messages = vec![
+            OpenAiMessage {
+                role: "assistant".into(),
+                content: None,
+                tool_call_id: None,
+                tool_calls: Some(vec![OpenAiToolCall {
+                    id: Some("call_1".into()),
+                    function: Some(OpenAiFunctionRef {
+                        name: Some("search".into()),
+                        arguments: Some(r#"{"q":"rust"}"#.into()),
+                    }),
+                }]),
+            },
+            OpenAiMessage {
+                role: "tool".into(),
+                content: Some(serde_json::Value::String(
+                    "Rust is a systems language".into(),
+                )),
+                tool_call_id: Some("call_1".into()),
+                tool_calls: None,
+            },
+        ];
+
+        let wire = wire_messages(&messages);
+        assert_eq!(wire.len(), 2);
+        match &wire[1] {
+            CcMessage::Tool { content } => {
+                assert_eq!(content.len(), 1);
+                match &content[0] {
+                    CcContentItem::ToolResult {
+                        tool_call_id,
+                        tool_name,
+                        output,
+                    } => {
+                        assert_eq!(tool_call_id, "call_1");
+                        assert_eq!(tool_name, "search");
+                        assert_eq!(output.value, "Rust is a systems language");
+                    }
+                    _ => panic!("expected tool-result"),
+                }
+            }
+            _ => panic!("expected tool message"),
+        }
+    }
+
+    #[test]
+    fn test_wire_messages_empty_content() {
+        let messages = vec![OpenAiMessage {
+            role: "user".into(),
+            content: None,
+            tool_call_id: None,
+            tool_calls: None,
+        }];
+
+        let wire = wire_messages(&messages);
+        // Empty content produces no messages
+        assert!(wire.is_empty());
+    }
+
+    #[test]
+    fn test_build_completion_empty_text() {
+        let usage = CcUsage {
+            input_tokens: 5,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+        };
+        let resp = build_completion("m", "", "", &[], FinishReason::Stop, &usage);
+        assert!(resp.choices[0].message.content.is_none());
+        assert!(resp.choices[0].message.tool_calls.is_none());
+    }
+
+    #[test]
+    fn test_build_completion_with_reasoning() {
+        let usage = CcUsage {
+            input_tokens: 10,
+            output_tokens: 20,
+            cache_read_tokens: 0,
+        };
+        let resp = build_completion(
+            "m",
+            "final answer",
+            "thinking process",
+            &[],
+            FinishReason::Stop,
+            &usage,
+        );
+        assert_eq!(
+            resp.choices[0].message.content.as_deref(),
+            Some("final answer")
+        );
+        assert_eq!(
+            resp.choices[0].message.reasoning_content.as_deref(),
+            Some("thinking process")
+        );
+    }
+
+    #[test]
+    fn test_build_completion_with_tool_calls() {
+        let usage = CcUsage {
+            input_tokens: 10,
+            output_tokens: 5,
+            cache_read_tokens: 0,
+        };
+        let tool_calls = vec![
+            (
+                "tc_1".to_string(),
+                "get_weather".to_string(),
+                serde_json::json!({"city": "London"}),
+            ),
+            (
+                "tc_2".to_string(),
+                "get_time".to_string(),
+                serde_json::json!({"timezone": "UTC"}),
+            ),
+        ];
+        let resp = build_completion("m", "", "", &tool_calls, FinishReason::ToolCalls, &usage);
+        let tc = resp.choices[0].message.tool_calls.as_ref().unwrap();
+        assert_eq!(tc.len(), 2);
+        assert_eq!(tc[0].id, "tc_1");
+        assert_eq!(tc[0].function.name, "get_weather");
+        assert_eq!(tc[1].id, "tc_2");
+        assert_eq!(tc[1].function.name, "get_time");
+        assert_eq!(resp.choices[0].finish_reason, "tool_calls");
+    }
+
+    #[test]
+    fn test_build_completion_finish_reasons() {
+        let usage = CcUsage {
+            input_tokens: 1,
+            output_tokens: 1,
+            cache_read_tokens: 0,
+        };
+
+        let resp = build_completion("m", "", "", &[], FinishReason::Stop, &usage);
+        assert_eq!(resp.choices[0].finish_reason, "stop");
+
+        let resp = build_completion("m", "", "", &[], FinishReason::ToolCalls, &usage);
+        assert_eq!(resp.choices[0].finish_reason, "tool_calls");
+
+        let resp = build_completion("m", "", "", &[], FinishReason::Length, &usage);
+        assert_eq!(resp.choices[0].finish_reason, "length");
+    }
+
+    #[test]
+    fn test_upstream_event_all_fields() {
+        let json = r#"{
+            "type": "tool-call",
+            "toolCallId": "tc_123",
+            "toolName": "my_tool",
+            "input": {"key": "value"},
+            "finishReason": "stop",
+            "rawFinishReason": "tool_use",
+            "totalUsage": {
+                "inputTokens": 100,
+                "outputTokens": 50,
+                "inputTokenDetails": {"cacheReadTokens": 10}
+            }
+        }"#;
+        let evt: UpstreamEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(evt.event_type, "tool-call");
+        assert_eq!(evt.tool_call_id.as_deref(), Some("tc_123"));
+        assert_eq!(evt.tool_name.as_deref(), Some("my_tool"));
+        assert!(evt.input.is_some());
+        assert_eq!(evt.finish_reason.as_deref(), Some("stop"));
+        assert_eq!(evt.raw_finish_reason.as_deref(), Some("tool_use"));
+        assert!(evt.total_usage.is_some());
+    }
+
+    #[test]
+    fn test_upstream_event_error() {
+        let json = r#"{
+            "type": "error",
+            "error": {"message": "Something went wrong"}
+        }"#;
+        let evt: UpstreamEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(evt.event_type, "error");
+        assert_eq!(
+            evt.error.as_ref().unwrap().message.as_deref(),
+            Some("Something went wrong")
+        );
+    }
+
+    #[test]
+    fn test_cc_request_serialization() {
+        let req = CcRequest {
+            config: CcConfig {
+                working_dir: "/tmp".into(),
+                date: "2024-01-01".into(),
+                environment: "linux".into(),
+                structure: vec!["file.txt".into()],
+                is_git_repo: false,
+                current_branch: "".into(),
+                main_branch: "".into(),
+                git_status: "".into(),
+                recent_commits: vec![],
+            },
+            memory: None,
+            taste: None,
+            skills: None,
+            permission_mode: "standard".into(),
+            mode: "agent".into(),
+            params: CcParams {
+                model: "test".into(),
+                messages: vec![],
+                tools: vec![],
+                max_tokens: 100,
+                stream: true,
+                system: None,
+                temperature: None,
+                reasoning_effort: None,
+            },
+        };
+
+        let json = serde_json::to_value(&req).unwrap();
+        // CcConfig uses snake_case field names in serialization
+        assert_eq!(json["config"]["working_dir"], "/tmp");
+        assert_eq!(json["mode"], "agent");
+    }
+
+    #[test]
+    fn test_cc_message_serialization_roundtrip() {
+        let msg = CcMessage::User {
+            content: vec![CcContentItem::Text {
+                text: "Hello".into(),
+            }],
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: CcMessage = serde_json::from_str(&json).unwrap();
+        match parsed {
+            CcMessage::User { content } => {
+                assert_eq!(content.len(), 1);
+                match &content[0] {
+                    CcContentItem::Text { text } => assert_eq!(text, "Hello"),
+                    _ => panic!("expected text"),
+                }
+            }
+            _ => panic!("expected user message"),
+        }
+    }
+
+    #[test]
+    fn test_cc_content_item_tool_call_serialization() {
+        let item = CcContentItem::ToolCall {
+            tool_call_id: "tc_1".into(),
+            tool_name: "my_tool".into(),
+            input: serde_json::json!({"key": "value"}),
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        assert!(json.contains("tool-call"));
+        assert!(json.contains("tc_1"));
+        assert!(json.contains("my_tool"));
+
+        let parsed: CcContentItem = serde_json::from_str(&json).unwrap();
+        match parsed {
+            CcContentItem::ToolCall {
+                tool_call_id,
+                tool_name,
+                ..
+            } => {
+                assert_eq!(tool_call_id, "tc_1");
+                assert_eq!(tool_name, "my_tool");
+            }
+            _ => panic!("expected tool-call"),
+        }
+    }
+
+    #[test]
+    fn test_extract_text_content_string() {
+        let content = Some(serde_json::Value::String("hello".into()));
+        assert_eq!(extract_text_content(&content), "hello");
+    }
+
+    #[test]
+    fn test_extract_text_content_array() {
+        let content = Some(serde_json::json!([
+            {"type": "text", "text": "hello"},
+            {"type": "text", "text": "world"}
+        ]));
+        assert_eq!(extract_text_content(&content), "hello world");
+    }
+
+    #[test]
+    fn test_extract_text_content_none() {
+        let content: Option<serde_json::Value> = None;
+        assert_eq!(extract_text_content(&content), "");
+    }
+
+    #[test]
+    fn test_extract_user_content_image_url() {
+        let content = Some(serde_json::json!([
+            {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}}
+        ]));
+        let items = extract_user_content(&content);
+        assert_eq!(items.len(), 1);
+        match &items[0] {
+            CcContentItem::Image { image, .. } => {
+                assert_eq!(image, "https://example.com/img.png");
+            }
+            _ => panic!("expected image"),
+        }
+    }
+
+    #[test]
+    fn test_extract_user_content_plain_string_in_array() {
+        let content = Some(serde_json::json!(["just a string"]));
+        let items = extract_user_content(&content);
+        assert_eq!(items.len(), 1);
+        match &items[0] {
+            CcContentItem::Text { text } => assert_eq!(text, "just a string"),
+            _ => panic!("expected text"),
+        }
+    }
+
+    #[test]
+    fn test_extract_assistant_content_reasoning() {
+        let content = serde_json::json!([
+            {"type": "reasoning", "text": "thinking..."},
+            {"type": "text", "text": "answer"}
+        ]);
+        let mut tool_name_map = HashMap::new();
+        let items = extract_assistant_content(&content, &mut tool_name_map);
+        assert_eq!(items.len(), 2);
+        match &items[0] {
+            CcContentItem::Reasoning { text } => assert_eq!(text, "thinking..."),
+            _ => panic!("expected reasoning"),
+        }
+    }
+
+    #[test]
+    fn test_extract_assistant_content_tool_call_with_function() {
+        let content = serde_json::json!([
+            {"type": "tool_call", "function": {"name": "my_func"}, "id": "tc_1", "arguments": "{}"}
+        ]);
+        let mut tool_name_map = HashMap::new();
+        let items = extract_assistant_content(&content, &mut tool_name_map);
+        assert_eq!(items.len(), 1);
+        assert!(tool_name_map.contains_key("tc_1"));
+    }
+
+    #[test]
+    fn test_extract_assistant_content_tool_call_with_input() {
+        let content = serde_json::json!([
+            {"type": "tool-call", "name": "my_tool", "id": "tc_2", "input": {"key": "val"}}
+        ]);
+        let mut tool_name_map = HashMap::new();
+        let items = extract_assistant_content(&content, &mut tool_name_map);
+        assert_eq!(items.len(), 1);
+        match &items[0] {
+            CcContentItem::ToolCall { tool_name, .. } => {
+                assert_eq!(tool_name, "my_tool");
+            }
+            _ => panic!("expected tool-call"),
+        }
+    }
+
+    #[test]
+    fn test_extract_assistant_content_thinking_alias() {
+        let content = serde_json::json!([
+            {"type": "thinking", "thinking": "deep thought"}
+        ]);
+        let mut tool_name_map = HashMap::new();
+        let items = extract_assistant_content(&content, &mut tool_name_map);
+        assert_eq!(items.len(), 1);
+        match &items[0] {
+            CcContentItem::Reasoning { text } => assert_eq!(text, "deep thought"),
+            _ => panic!("expected reasoning"),
+        }
+    }
+
+    #[test]
+    fn test_extract_assistant_content_string() {
+        let content = serde_json::Value::String("simple text".into());
+        let mut tool_name_map = HashMap::new();
+        let items = extract_assistant_content(&content, &mut tool_name_map);
+        assert_eq!(items.len(), 1);
+        match &items[0] {
+            CcContentItem::Text { text } => assert_eq!(text, "simple text"),
+            _ => panic!("expected text"),
+        }
+    }
+
+    #[test]
+    fn test_wire_messages_tool_result_with_array_content() {
+        let messages = vec![
+            OpenAiMessage {
+                role: "assistant".into(),
+                content: None,
+                tool_call_id: None,
+                tool_calls: Some(vec![OpenAiToolCall {
+                    id: Some("call_1".into()),
+                    function: Some(OpenAiFunctionRef {
+                        name: Some("search".into()),
+                        arguments: None,
+                    }),
+                }]),
+            },
+            OpenAiMessage {
+                role: "tool".into(),
+                content: Some(serde_json::json!([
+                    {"type": "tool-result", "toolCallId": "call_1", "toolName": "search", "output": {"type": "text", "value": "result"}}
+                ])),
+                tool_call_id: Some("call_1".into()),
+                tool_calls: None,
+            },
+        ];
+
+        let wire = wire_messages(&messages);
+        // The tool result array is parsed, but tool-result type might not match exactly
+        assert_eq!(wire.len(), 2);
+        match &wire[1] {
+            CcMessage::Tool { content } => {
+                assert!(!content.is_empty());
+            }
+            _ => panic!("expected tool message"),
+        }
+    }
+
+    #[test]
+    fn test_usage_serialization_roundtrip() {
+        let usage = Usage {
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            total_tokens: 150,
+            prompt_tokens_details: Some(PromptTokenDetails { cached_tokens: 25 }),
+        };
+        let json = serde_json::to_string(&usage).unwrap();
+        let parsed: Usage = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.prompt_tokens, 100);
+        assert_eq!(parsed.completion_tokens, 50);
+        assert_eq!(parsed.total_tokens, 150);
+        assert_eq!(
+            parsed.prompt_tokens_details.as_ref().unwrap().cached_tokens,
+            25
+        );
+    }
+
+    #[test]
+    fn test_cc_usage_default() {
+        let usage = CcUsage::default();
+        assert_eq!(usage.input_tokens, 0);
+        assert_eq!(usage.output_tokens, 0);
+        assert_eq!(usage.cache_read_tokens, 0);
+    }
 }

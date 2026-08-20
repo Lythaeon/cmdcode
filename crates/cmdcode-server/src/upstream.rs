@@ -345,79 +345,132 @@ impl UpstreamClient {
                                 model: &model_str,
                                 tool_index: 0,
                                 skipped: 0,
+                                finish_seen: false,
                             };
 
                             let mut done = false;
+                            let mut emitted = 0u32;
                             while !done {
                                 tokio::select! {
-                                    chunk = stream.next() => {
-                                        match chunk {
-                                            None => done = true, // clean upstream EOF
-                                            Some(Ok(b)) => {
-                                                buffer.extend_from_slice(&b);
-                                                // Defense against an upstream that
-                                                // streams data with no newlines: cap
-                                                // the unconsumed buffer so a hostile
-                                                // or broken upstream cannot grow it
-                                                // without bound.
-                                                if buffer.len() - start > MAX_STREAM_BUFFER {
-                                                    metrics.inc_truncated_stream();
-                                                    return;
-                                                }
-                                                loop {
-                                                    let rel = buffer[start..].iter().position(|&b| b == b'\n');
-                                                    match rel {
-                                                        Some(rel) => {
-                                                            let abs = start + rel;
-                                                            // Decode the line bytes to UTF-8 (lossy is OK for individual complete lines)
-                                                            let line = std::str::from_utf8(&buffer[start..abs])
-                                                                .unwrap_or_default()
-                                                                .trim();
-                                                            start = abs + 1;
-                                                            if line.is_empty() { continue; }
-                                                            match translate_line(line, &mut state) {
-                                                                LineOutcome::Skip => {}
-                                                                LineOutcome::Emit(payload) => {
-                                                                    if tx.send(Ok(payload)).await.is_err() {
+                                                                    chunk = stream.next() => {
+                                                                        match chunk {
+                                                                            None => done = true, // clean upstream EOF
+                                Some(Ok(b)) => {
+                                                                                buffer.extend_from_slice(&b);
+                                                                                // Bound total unconsumed buffer (DoS guard
+                                                                                // against an upstream that streams data with
+                                                                                // no newlines). Raised well above a single
+                                                                                // legitimate oversized line so the per-line
+                                                                                // skip above handles those. Legitimate lines
+                                                                                // up to MAX_STREAM_BUFFER_LIMIT. If the buffer
+                                                                                // still exceeds this we have no newline at
+                                                                                // all — abort.
+                                                                                if buffer.len() - start > MAX_STREAM_BUFFER_LIMIT
+                                                                                {
+                                                                                    metrics.inc_truncated_stream();
+                                                                                    return;
+                                                                                }
+                                                                                loop {
+                                                                                    let rel = buffer[start..]
+                                                                                        .iter()
+                                                                                        .position(|&b| b == b'\n');
+                                                                                    match rel {
+                                                                                        Some(rel) => {
+                                                                                            let abs = start + rel;
+                                                                                            let line_len = abs - start;
+                                                                                            // Oversized records (e.g. the upstream
+                                                                                            // `start-step` event, which echoes the full
+                                                                                            // request — tools + messages — on a single
+                                                                                            // NDJSON line and can exceed
+                                                                                            // MAX_STREAM_BUFFER) are metadata we do not
+                                                                                            // translate. Skip them instead of aborting the
+                                                                                            // whole stream; large requests previously
+                                                                                            // came back empty because the buffer cap
+                                                                                            // killed the stream before downstream events.
+                                                                                            if line_len > MAX_STREAM_BUFFER {
+                                                                                                metrics.inc_truncated_stream();
+                                                                                            } else {
+                                                                                                let line = std::str::from_utf8(
+                                                                                                    &buffer[start..abs],
+                                                                                                )
+                                                                                                .unwrap_or_default()
+                                                                                                .trim();
+                                                                                                if !line.is_empty() {
+                                                                                                    match translate_line(
+                                                                                                        line, &mut state,
+                                                                                                    ) {
+                                                                                                        LineOutcome::Skip => {}
+                                                                                                        LineOutcome::Emit(
+                                                                                                            payload,
+                                                                                                        ) => {
+                                                                                                            emitted += 1;
+                                                                                                            if tx
+                                                                                                                .send(Ok(payload))
+                                                                                                                .await
+                                                                                                                .is_err()
+                                                                                                            {
+                                                                                                                return;
+                                                                                                            }
+                                                                                                        }
+                                                                                                        LineOutcome::EmitAndStop(
+                                                                                                            payload,
+                                                                                                        ) => {
+                                                                                                            if tx
+                                                                                                                .send(Ok(payload))
+                                                                                                                .await
+                                                                                                                .is_err()
+                                                                                                            {
+                                                                                                                return;
+                                                                                                            }
+                                                                                                            let _ = tx
+                                                                                                                .send(Ok(
+                                                                                                                    "data: [DONE]\n\n"
+                                                                                                                        .to_string(),
+                                                                                                                ))
+                                                                                                                .await;
+                                                                                                            return;
+                                                                                                        }
+                                                                                                    }
+                                                                                                }
+                                                                                            }
+                                                                                            start = abs + 1;
+                                                                                        }
+                                                                                        None => break,
+                                                                                    }
+                                                                                }
+                                                                                if start > 0 {
+                                                                                    buffer.drain(..start);
+                                                                                    start = 0;
+                                                                                }
+                                                                            }
+                                                                            Some(Err(e)) => {
+                                                                                let _ = tx.send(Err(e.to_string())).await;
+                                                                                return;
+                                                                            }
+                                                                        }
+                                                                    },
+                                                                    () = cancel_inner.cancelled() => {
+                                                                        // Downstream client disconnected or the
+                                                                        // idle timer fired: abort immediately.
                                                                         return;
-                                                                    }
+                                                                    },
                                                                 }
-                                                                LineOutcome::EmitAndStop(payload) => {
-                                                                    if tx.send(Ok(payload)).await.is_err() {
-                                                                        return;
-                                                                    }
-                                                                    let _ = tx.send(Ok("data: [DONE]\n\n".to_string())).await;
-                                                                    return;
-                                                                }
-                                                            }
-                                                        }
-                                                        None => break,
-                                                    }
-                                                }
-                                                if start > 0 {
-                                                    buffer.drain(..start);
-                                                    start = 0;
-                                                }
-                                            }
-                                            Some(Err(e)) => {
-                                                let _ = tx.send(Err(e.to_string())).await;
-                                                return;
-                                            }
-                                        }
-                                    },
-                                    () = cancel_inner.cancelled() => {
-                                        // Downstream client disconnected or the
-                                        // idle timer fired: abort immediately.
-                                        return;
-                                    },
-                                }
                             }
 
                             // Clean EOF: flush any residual unterminated record.
                             let residual =
                                 String::from_utf8_lossy(&buffer[start..]).trim().to_string();
                             if residual.is_empty() {
-                                let _ = tx.send(Ok("data: [DONE]\n\n".to_string())).await;
+                                // Only send the OpenAI [DONE] terminal marker if we
+                                // actually produced a finish event (or content). An
+                                // upstream that closes after a bare {"type":"start"}
+                                // with no finish must NOT look like a clean success
+                                // to the client — the handler uses a zero-chunk
+                                // stream as the signal to retry the upstream call
+                                // (mirroring the CLI's callModelWithRetry behavior).
+                                if state.finish_seen || emitted > 0 {
+                                    let _ = tx.send(Ok("data: [DONE]\n\n".to_string())).await;
+                                }
                             } else {
                                 match translate_line(&residual, &mut state) {
                                     LineOutcome::Skip => {
@@ -498,9 +551,17 @@ fn is_auth_rejected(status: u16) -> bool {
 /// each time. The TTL keeps the listing fresh enough to reflect new files.
 const STRUCTURE_CACHE_TTL_SECS: u64 = 5;
 
-/// Max unconsumed bytes buffered while waiting for a newline in a stream.
-/// Guards against an upstream that never sends `\n` (memory-exhaustion DoS).
+/// Max length of a single NDJSON record (line) the proxy will translate.
+/// Larger records — e.g. the upstream `start-step` echo of the full request
+/// body — are metadata and are skipped, not translated, so this is the
+/// per-record translate bound, not an abort threshold.
 const MAX_STREAM_BUFFER: usize = 1024 * 1024;
+
+/// Absolute cap on the unconsumed buffer while waiting for a newline.
+/// Guards against an upstream that truly never sends `\n`
+/// (memory-exhaustion DoS). Reduced from 16MB to 4MB to limit per-stream
+/// memory usage while still allowing legitimate large responses.
+const MAX_STREAM_BUFFER_LIMIT: usize = 4 * 1024 * 1024;
 
 fn cached_structure(cwd: &str) -> Vec<String> {
     use std::sync::Mutex;
@@ -574,6 +635,8 @@ pub struct StreamState<'a> {
     pub tool_index: u32,
     /// Number of malformed / unknown upstream events skipped so far.
     pub skipped: u32,
+    /// Whether a `finish` event has been seen for this stream.
+    pub finish_seen: bool,
 }
 
 /// Result of translating a single upstream NDJSON line.
@@ -597,13 +660,23 @@ pub fn translate_line(line: &str, state: &mut StreamState) -> LineOutcome {
 
     let evt = match serde_json::from_str::<UpstreamEvent>(line) {
         Ok(e) => e,
-        Err(_) => {
+        Err(e) => {
             state.skipped += 1;
+            tracing::warn!(
+                raw_line = %line.chars().take(200).collect::<String>(),
+                error = %e,
+                "skipped unparseable upstream event"
+            );
             return LineOutcome::Skip;
         }
     };
 
     let chunk = match evt.event_type.as_str() {
+        "start" | "session_start" => {
+            // Session-start marker from the upstream. Contains no content;
+            // carry it through as a no-op so it is not counted as a skip.
+            return LineOutcome::Skip;
+        }
         "text-delta" => {
             let text = evt.text.unwrap_or_default();
             serde_json::json!({
@@ -666,6 +739,7 @@ pub fn translate_line(line: &str, state: &mut StreamState) -> LineOutcome {
             })
         }
         "finish" => {
+            state.finish_seen = true;
             let raw = evt
                 .raw_finish_reason
                 .as_deref()
@@ -724,6 +798,11 @@ pub fn translate_line(line: &str, state: &mut StreamState) -> LineOutcome {
         }
         _ => {
             state.skipped += 1;
+            tracing::warn!(
+                event_type = %evt.event_type,
+                raw_line = %line.chars().take(200).collect::<String>(),
+                "skipped unknown upstream event type"
+            );
             return LineOutcome::Skip;
         }
     };
@@ -791,6 +870,7 @@ mod tests {
             model,
             tool_index: 0,
             skipped: 0,
+            finish_seen: false,
         }
     }
 
@@ -1065,6 +1145,7 @@ mod tests {
                 model: "m",
                 tool_index: 0,
                 skipped: 0,
+                finish_seen: false,
             };
             match translate_line(&line, &mut s) {
                 LineOutcome::Skip => {}

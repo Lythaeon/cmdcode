@@ -4,3 +4,6 @@
 *.swo
 *~
 .DS_Store
+
+# Local hunt/bounty tooling scratch files (not part of the project)
+.bounty-*

@@ -361,10 +361,14 @@ dependencies = [
 
 [[package]]
 name = "cmdcode"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
+ "clap",
  "cmdcode-core",
  "cmdcode-server",
+ "dirs",
+ "reqwest",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -372,7 +376,7 @@ dependencies = [
 
 [[package]]
 name = "cmdcode-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dirs",
  "proptest",
@@ -387,7 +391,7 @@ dependencies = [
 
 [[package]]
 name = "cmdcode-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "bytes",

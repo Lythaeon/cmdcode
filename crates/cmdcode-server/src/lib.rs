@@ -37,6 +37,18 @@ impl ProxyService {
 
     /// Start the proxy server and run forever.
     pub fn run(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // F-1: Warn when binding to non-localhost without auth token.
+        let host = self.config.listen_addr.split(':').next().unwrap_or("");
+        if host != "127.0.0.1" && host != "localhost" && self.config.incoming_token.is_none() {
+            eprintln!("[cmdcode] WARNING: binding to {} without COMMAND_CODE_PROXY_INCOMING_TOKEN set. Any network client can use your Command Code subscription through this proxy.", self.config.listen_addr);
+            eprintln!("[cmdcode] Set COMMAND_CODE_PROXY_INCOMING_TOKEN to require bearer token authentication on API routes.");
+        }
+
+        // F-7: Warn when upstream URL is HTTP (credentials sent in plaintext).
+        if self.config.upstream_url.starts_with("http://") {
+            eprintln!("[cmdcode] WARNING: upstream URL {} uses HTTP. API credentials will be sent in plaintext. Use HTTPS for production.", self.config.upstream_url);
+        }
+
         let mut server = Server::new(None)?;
         server.bootstrap();
 

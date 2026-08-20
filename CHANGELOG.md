@@ -4,6 +4,82 @@ All notable changes to cmdcode are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-08-21
+
+CLI subcommand refactor, streaming robustness fixes, and a security-hardening
+pass. The most impactful change is a fix for **large opencode sessions
+silently returning empty streams** — the proxy now correctly handles the
+upstream's multi-megabyte `start-step` event echo and retries genuine empty
+streams the same way the official CLI does.
+
+### Highlights
+- **CLI subcommands** — replaced the single `cmdcode` launcher with a
+  clap-based CLI: `cmdcode serve`, `cmdcode status`, `cmdcode models`,
+  `cmdcode config`, `cmdcode auth`, and `cmdcode test` (a full self-diagnostic
+  that starts the proxy, sends a real completion, and validates the upstream
+  round-trip against your logged-in credentials).
+- **Empty-stream retry** — the upstream occasionally accepts a request, emits
+  only `{"type":"start"}`, then closes with no content and no `finish` event.
+  The proxy now defers the 200 SSE header until the first real chunk, retries
+  the upstream call with exponential backoff (mirroring the CLI's
+  `callModelWithRetry`), and only surfaces an explicit `502` error after all
+  retries are exhausted instead of a silent empty success that made opencode
+  sessions appear to "exit for no reason".
+- **Oversized-line resilience** — the upstream `start-step` event echoes the
+  full request body (tools + messages) on a single NDJSON line, which can
+  exceed 1 MiB on large opencode sessions. The proxy previously aborted the
+  entire stream, producing `chunks=0` (empty client response). Oversized
+  records are now skipped as metadata and the real events after them continue
+  to stream. The absolute no-newline DoS cap is retained at 4 MiB.
+- **Security hardening pass** (`F-1`–`F-8`):
+  - Warn on non-localhost binds without `COMMAND_CODE_PROXY_INCOMING_TOKEN`.
+  - Validate CORS `Origin` (no `*` / wildcard / bare scheme bypass).
+  - Warn when the upstream URL is plain `http://`.
+  - Constant-time token comparison edge-case tests.
+- **Expanded test suite** — ~90 new tests across auth, wire format, types,
+  plus two new fuzz targets (`fuzz_auth_security`, `fuzz_errors`) and
+  security-focused property tests.
+
+### Added
+- `cmdcode` CLI subcommands: `serve`, `status`, `models`, `config`, `auth`,
+  `test` (clap-based, `cli.rs` + `commands/`).
+- `cmdcode_empty_streams_total` Prometheus counter.
+- `fuzz_auth_security`, `fuzz_errors` fuzz targets.
+- Security-focused proptests (model ID strip, auth/config deserialize,
+  error Display) in `proptests.rs`.
+- Missing-docs and coverage tests for auth manager, wire-format helpers.
+
+### Fixed
+- **Empty upstream stream aborts the whole response** — 1 MiB streaming cap
+  tripped on the upstream `start-step` request-echo line, killing large
+  sessions with no output. Oversized lines are now skipped; real events after
+  them are delivered.
+- **Silent empty 200 on upstream close** — a stream that closes with no
+  content/no `finish` is now retried with backoff and returns an explicit 502
+  after retries, matching the official CLI's `callModelWithRetry` behavior.
+- **CLI clippy violations** — the new `test` command had `expect`/`unwrap`
+  that failed `-D clippy::all`; replaced with error-propagation + exit codes.
+
+### Security
+- **[Low] CORS wildcard reflection** (`F-4`) — `Access-Control-Allow-Origin`
+  no longer echoes `*` or bare-scheme origins; only explicit `http(s)://`
+  origins are reflected.
+- **[Low] CRLF injection via `COMMAND_CODE_ENV`** (`F-8`) — env-derived
+  `x-cli-environment` header value sanitized against `\r`/`\n` to prevent
+  header injection.
+- **[Low] Constant-time comparison edge cases** (`F-3`) — added explicit
+  coverage that length-mismatched tokens never compare equal.
+- **[Informational] Unauthenticated bind warning** (`F-1`) —
+  non-localhost binds without an incoming token warn at startup.
+- **[Informational] Plaintext upstream warning** (`F-7`) — `http://`
+  upstream URLs warn that credentials are sent in plaintext.
+
+### Dependencies
+- No new advisories. Continuing to track `protobuf 2.28.0`
+  (RUSTSEC-2024-0437) and `lru 0.16.4` (RUSTSEC-2026-0253) — see v0.1.0.
+
+**Compare**: https://github.com/Lythaeon/cmdcode/compare/v0.1.0...v0.2.0
+
 ## [0.1.0] - 2026-08-20
 
 Initial public release. OpenAI-compatible proxy for the Command Code API,

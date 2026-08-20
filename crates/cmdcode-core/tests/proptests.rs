@@ -257,3 +257,118 @@ proptest! {
         assert!(!tc[0].function.arguments.is_empty());
     }
 }
+
+// === Security-focused proptests ===
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 1024, ..ProptestConfig::default() })]
+
+    /// ModelId::strip_prefix must never panic and must preserve non-prefixed IDs.
+    #[test]
+    fn prop_model_id_strip_prefix_never_panics(model in ".*") {
+        let id = cmdcode_core::types::ModelId::new(&model);
+        let stripped = id.strip_prefix();
+        // If the original had the prefix, stripped must not have it
+        if model.starts_with("command-code/") {
+            assert!(!stripped.as_str().starts_with("command-code/"));
+        }
+    }
+
+    /// AuthData must deserialize from any JSON without panicking.
+    #[test]
+    fn prop_auth_data_never_panics(json in ".*") {
+        let _ = serde_json::from_str::<cmdcode_core::auth::AuthData>(&json);
+    }
+
+    /// ConfigData must deserialize from any JSON without panicking.
+    #[test]
+    fn prop_config_data_never_panics(json in ".*") {
+        let _ = serde_json::from_str::<cmdcode_core::auth::ConfigData>(&json);
+    }
+
+    /// ProxyConfig error types must have non-empty messages.
+    #[test]
+    fn prop_config_error_display(msg in ".*") {
+        let err = cmdcode_core::error::ConfigError::InvalidListenAddress(msg.clone());
+        assert!(!err.to_string().is_empty());
+        let err = cmdcode_core::error::ConfigError::InvalidUpstreamUrl(msg.clone());
+        assert!(!err.to_string().is_empty());
+        let err = cmdcode_core::error::ConfigError::InvalidTimeout(msg.clone());
+        assert!(!err.to_string().is_empty());
+        let err = cmdcode_core::error::ConfigError::ModelAllowlistParse(msg);
+        assert!(!err.to_string().is_empty());
+    }
+
+    /// AuthError variants must have non-empty display messages.
+    #[test]
+    fn prop_auth_error_display(msg in ".*") {
+        let err = cmdcode_core::error::AuthError::FileNotFound { path: msg.clone() };
+        assert!(!err.to_string().is_empty());
+        // Use a synthetic error source for InvalidJson
+        let source_err = serde_json::from_str::<serde_json::Value>("not json").unwrap_err();
+        let err = cmdcode_core::error::AuthError::InvalidJson { path: msg.clone(), source: source_err };
+        assert!(!err.to_string().is_empty());
+        let err = cmdcode_core::error::AuthError::MissingField { field: "test" };
+        assert!(!err.to_string().is_empty());
+        let err = cmdcode_core::error::AuthError::TokenRefreshFailed(msg);
+        assert!(!err.to_string().is_empty());
+    }
+
+    /// UpstreamError variants must have non-empty display messages.
+    #[test]
+    fn prop_upstream_error_display(host in ".*", msg in ".*") {
+        let err = cmdcode_core::error::UpstreamError::ConnectionRefused { host: host.clone(), port: 80 };
+        assert!(!err.to_string().is_empty());
+        let err = cmdcode_core::error::UpstreamError::Timeout { timeout_secs: 30 };
+        assert!(!err.to_string().is_empty());
+        let err = cmdcode_core::error::UpstreamError::Tls(msg.clone());
+        assert!(!err.to_string().is_empty());
+        let err = cmdcode_core::error::UpstreamError::HttpError { status: 500, body: msg.clone() };
+        assert!(!err.to_string().is_empty());
+        let err = cmdcode_core::error::UpstreamError::NonJsonError { body: msg };
+        assert!(!err.to_string().is_empty());
+    }
+
+    /// ProxyError must wrap all sub-errors without panicking.
+    #[test]
+    fn prop_proxy_error_wrapping(msg in ".*") {
+        let err = cmdcode_core::error::ProxyError::Auth(cmdcode_core::error::AuthError::NoAuthConfigured);
+        assert!(!err.to_string().is_empty());
+        let err = cmdcode_core::error::ProxyError::ModelNotAllowed(msg.clone());
+        assert!(!err.to_string().is_empty());
+        let err = cmdcode_core::error::ProxyError::InvalidEffort(msg);
+        assert!(!err.to_string().is_empty());
+    }
+
+    /// CcUsage arithmetic must always be correct.
+    #[test]
+    fn prop_cc_usage_arithmetic(
+        input in 0u32..1_000_000u32,
+        output in 0u32..1_000_000u32,
+        cached in 0u32..1_000_000u32,
+    ) {
+        let usage = CcUsage {
+            input_tokens: input,
+            output_tokens: output,
+            cache_read_tokens: cached,
+        };
+        let resp = build_completion(
+            "m",
+            "text",
+            "",
+            &[],
+            WireFinishReason::Stop,
+            &usage,
+        );
+        assert_eq!(resp.usage.prompt_tokens, input);
+        assert_eq!(resp.usage.completion_tokens, output);
+        assert_eq!(resp.usage.total_tokens, input + output);
+    }
+
+    /// ContextWindow must store and retrieve values correctly.
+    #[test]
+    fn prop_context_window_roundtrip(tokens in 0u64..u64::MAX) {
+        let cw = cmdcode_core::types::ContextWindow::new(tokens);
+        assert_eq!(cw.as_u64(), tokens);
+    }
+}
