@@ -340,7 +340,7 @@ pub fn wire_messages(messages: &[OpenAiMessage]) -> Vec<CcMessage> {
                         Ok(item) => cc_items.push(item),
                         Err(e) => {
                             eprintln!(
-                                "[command-code-proxy] warning: failed to parse tool result: {e}"
+                                "[cmdcode] warning: failed to parse tool result: {e}"
                             );
                         }
                     }

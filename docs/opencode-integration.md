@@ -16,7 +16,7 @@ OpenCode ──> localhost:18080/v1/chat/completions ──> Command Code API
 ## Step 1: Start the proxy
 
 ```bash
-cd /path/to/command-code-openapi-proxy
+cd /path/to/cmdcode
 cargo run --release
 # listening on http://127.0.0.1:18080
 ```

@@ -155,42 +155,42 @@ impl Metrics {
         line(
             &mut out,
             "Total chat completions requests served.",
-            "command_code_proxy_requests_total",
+            "cmdcode_requests_total",
             self.requests_total.load(Ordering::Relaxed).to_string(),
             "counter",
         );
         line(
             &mut out,
             "Streaming requests served.",
-            "command_code_proxy_stream_requests_total",
+            "cmdcode_stream_requests_total",
             self.stream_requests.load(Ordering::Relaxed).to_string(),
             "counter",
         );
         line(
             &mut out,
             "Non-streaming requests served.",
-            "command_code_proxy_nonstream_requests_total",
+            "cmdcode_nonstream_requests_total",
             self.nonstream_requests.load(Ordering::Relaxed).to_string(),
             "counter",
         );
         line(
             &mut out,
             "SSE chunks forwarded to clients.",
-            "command_code_proxy_chunks_total",
+            "cmdcode_chunks_total",
             self.chunks_total.load(Ordering::Relaxed).to_string(),
             "counter",
         );
         line(
             &mut out,
             "Response bytes written to clients.",
-            "command_code_proxy_bytes_out_total",
+            "cmdcode_bytes_out_total",
             self.bytes_out_total.load(Ordering::Relaxed).to_string(),
             "counter",
         );
         line(
             &mut out,
             "Upstream retry attempts made.",
-            "command_code_proxy_upstream_retries_total",
+            "cmdcode_upstream_retries_total",
             self.upstream_retries_total
                 .load(Ordering::Relaxed)
                 .to_string(),
@@ -199,77 +199,77 @@ impl Metrics {
         line(
             &mut out,
             "Requests that failed or were rejected.",
-            "command_code_proxy_errors_total",
+            "cmdcode_errors_total",
             self.errors_total.load(Ordering::Relaxed).to_string(),
             "counter",
         );
         line(
             &mut out,
             "Requests rejected for an unparseable body.",
-            "command_code_proxy_bad_requests_total",
+            "cmdcode_bad_requests_total",
             self.bad_requests.load(Ordering::Relaxed).to_string(),
             "counter",
         );
         line(
             &mut out,
             "Requests rejected as oversized.",
-            "command_code_proxy_body_too_large_total",
+            "cmdcode_body_too_large_total",
             self.body_too_large.load(Ordering::Relaxed).to_string(),
             "counter",
         );
         line(
             &mut out,
             "Requests rejected by the model allowlist.",
-            "command_code_proxy_model_denied_total",
+            "cmdcode_model_denied_total",
             self.model_denied.load(Ordering::Relaxed).to_string(),
             "counter",
         );
         line(
             &mut out,
             "Requests hitting unknown routes.",
-            "command_code_proxy_unknown_routes_total",
+            "cmdcode_unknown_routes_total",
             self.unknown_routes.load(Ordering::Relaxed).to_string(),
             "counter",
         );
         line(
             &mut out,
             "Client disconnects mid-stream.",
-            "command_code_proxy_client_disconnects_total",
+            "cmdcode_client_disconnects_total",
             self.client_disconnects.load(Ordering::Relaxed).to_string(),
             "counter",
         );
         line(
             &mut out,
             "Upstream timeouts observed.",
-            "command_code_proxy_upstream_timeouts_total",
+            "cmdcode_upstream_timeouts_total",
             self.upstream_timeouts.load(Ordering::Relaxed).to_string(),
             "counter",
         );
         line(
             &mut out,
             "Upstream events skipped as malformed or unknown.",
-            "command_code_proxy_skipped_events_total",
+            "cmdcode_skipped_events_total",
             self.skipped_events.load(Ordering::Relaxed).to_string(),
             "counter",
         );
         line(
             &mut out,
             "Streams ending with a truncated final record.",
-            "command_code_proxy_truncated_streams_total",
+            "cmdcode_truncated_streams_total",
             self.truncated_streams.load(Ordering::Relaxed).to_string(),
             "counter",
         );
         line(
             &mut out,
             "Streams currently open.",
-            "command_code_proxy_active_streams",
+            "cmdcode_active_streams",
             self.active_streams.load(Ordering::Relaxed).to_string(),
             "gauge",
         );
         line(
             &mut out,
             "Proxy uptime in seconds.",
-            "command_code_proxy_uptime_seconds",
+            "cmdcode_uptime_seconds",
             self.uptime_secs().to_string(),
             "gauge",
         );
@@ -288,27 +288,27 @@ mod tests {
         let m = Metrics::new();
         let text = m.render();
         for name in [
-            "command_code_proxy_requests_total",
-            "command_code_proxy_stream_requests_total",
-            "command_code_proxy_nonstream_requests_total",
-            "command_code_proxy_chunks_total",
-            "command_code_proxy_bytes_out_total",
-            "command_code_proxy_upstream_retries_total",
-            "command_code_proxy_errors_total",
-            "command_code_proxy_bad_requests_total",
-            "command_code_proxy_body_too_large_total",
-            "command_code_proxy_model_denied_total",
-            "command_code_proxy_unknown_routes_total",
-            "command_code_proxy_client_disconnects_total",
-            "command_code_proxy_upstream_timeouts_total",
-            "command_code_proxy_skipped_events_total",
-            "command_code_proxy_truncated_streams_total",
-            "command_code_proxy_active_streams",
-            "command_code_proxy_uptime_seconds",
+            "cmdcode_requests_total",
+            "cmdcode_stream_requests_total",
+            "cmdcode_nonstream_requests_total",
+            "cmdcode_chunks_total",
+            "cmdcode_bytes_out_total",
+            "cmdcode_upstream_retries_total",
+            "cmdcode_errors_total",
+            "cmdcode_bad_requests_total",
+            "cmdcode_body_too_large_total",
+            "cmdcode_model_denied_total",
+            "cmdcode_unknown_routes_total",
+            "cmdcode_client_disconnects_total",
+            "cmdcode_upstream_timeouts_total",
+            "cmdcode_skipped_events_total",
+            "cmdcode_truncated_streams_total",
+            "cmdcode_active_streams",
+            "cmdcode_uptime_seconds",
         ] {
             assert!(text.contains(name), "missing metric {name}");
-            let kind = if name.ends_with("_total") || name == "command_code_proxy_active_streams" {
-                if name == "command_code_proxy_active_streams" {
+            let kind = if name.ends_with("_total") || name == "cmdcode_active_streams" {
+                if name == "cmdcode_active_streams" {
                     "gauge"
                 } else {
                     "counter"
@@ -353,7 +353,7 @@ mod tests {
         assert_eq!(m.active_streams.load(Ordering::Relaxed), 2);
         m.stream_finished();
         assert_eq!(m.active_streams.load(Ordering::Relaxed), 1);
-        assert!(m.render().contains("command_code_proxy_active_streams 1"));
+        assert!(m.render().contains("cmdcode_active_streams 1"));
     }
 
     #[test]
@@ -362,7 +362,7 @@ mod tests {
         let text = m.render();
         let line = text
             .lines()
-            .find(|l| l.starts_with("command_code_proxy_uptime_seconds "))
+            .find(|l| l.starts_with("cmdcode_uptime_seconds "))
             .expect("uptime line");
         let secs: u64 = line
             .split(' ')

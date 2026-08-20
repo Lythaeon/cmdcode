@@ -2,9 +2,17 @@
 name = "proxy-cli"
 version.workspace = true
 edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [[bin]]
-name = "command-code-proxy"
+name = "cmdcode"
 path = "src/main.rs"
 
 [dependencies]

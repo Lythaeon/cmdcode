@@ -10,15 +10,15 @@
 
 ```bash
 # Clone the repo
-git clone https://github.com/Lythaeon/command-code-openapi-proxy.git
-cd command-code-openapi-proxy
+git clone https://github.com/Lythaeon/cmdcode.git
+cd cmdcode
 
 # Build and run
 cargo run --release
 
 # Or build first, then run
 cargo build --release
-./target/release/command-code-proxy
+./target/release/cmdcode
 ```
 
 The proxy starts on `http://127.0.0.1:18080`.
@@ -133,7 +133,7 @@ This sets up the proxy to start automatically on boot and restart on failure.
 ### Step 1: Build the release binary
 
 ```bash
-cd /path/to/command-code-openapi-proxy
+cd /path/to/cmdcode
 cargo build --release
 ```
 
@@ -144,14 +144,14 @@ cargo build --release
 mkdir -p ~/.local/bin
 
 # Copy the binary
-cp target/release/command-code-proxy ~/.local/bin/
+cp target/release/cmdcode ~/.local/bin/
 
 # Make sure ~/.local/bin is in your PATH
 # Add to ~/.bashrc or ~/.zshrc if not already:
 #   export PATH="$HOME/.local/bin:$PATH"
 
 # Verify it works
-~/.local/bin/command-code-proxy --help
+~/.local/bin/cmdcode --help
 ```
 
 ### Step 3: Install the systemd service
@@ -235,21 +235,21 @@ systemctl --user restart command-code-proxy
 
 ```bash
 # Build the image
-docker build -t command-code-proxy .
+docker build -t cmdcode .
 
 # Run
 docker run -d \
-  --name command-code-proxy \
+  --name cmdcode \
   -p 18080:18080 \
   -v ~/.commandcode:/root/.commandcode:ro \
   -e COMMAND_CODE_PROXY_HOST=0.0.0.0 \
-  command-code-proxy
+  cmdcode
 ```
 
 ## Run behind nginx (production)
 
 ```nginx
-upstream command_code_proxy {
+upstream cmdcode_backend {
     server 127.0.0.1:18080;
 }
 
@@ -258,7 +258,7 @@ server {
     server_name proxy.example.com;
 
     location /v1/ {
-        proxy_pass http://command_code_proxy;
+        proxy_pass http://cmdcode_backend;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_buffering off;

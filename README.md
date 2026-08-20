@@ -1,4 +1,4 @@
-# command-code-openapi-proxy
+# cmdcode
 
 OpenAI-compatible proxy in front of Command Code's HTTP API. Use your
 Command Code subscription with **any** client supporting OpenAI Chat
@@ -25,8 +25,8 @@ traffic from the official `cmd` CLI.
 ```bash
 # Prerequisites: Rust 1.75+, command-code CLI authenticated
 
-git clone https://github.com/Lythaeon/command-code-openapi-proxy.git
-cd command-code-openapi-proxy
+git clone https://github.com/Lythaeon/cmdcode.git
+cd cmdcode
 
 # Run
 cargo run --release

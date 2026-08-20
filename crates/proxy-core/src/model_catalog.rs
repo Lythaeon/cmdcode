@@ -104,7 +104,7 @@ pub fn get_model_catalog() -> &'static HashMap<ModelId, ModelMeta> {
                 if let Ok(content) = std::fs::read_to_string(&path) {
                     let catalog = parse_models_md(&content);
                     eprintln!(
-                        "[command-code-proxy] loaded {} models from {}",
+                        "[cmdcode] loaded {} models from {}",
                         catalog.len(),
                         path.display()
                     );
@@ -118,7 +118,7 @@ pub fn get_model_catalog() -> &'static HashMap<ModelId, ModelMeta> {
             if let Ok(content) = std::fs::read_to_string(&path) {
                 let catalog = parse_models_md(&content);
                 eprintln!(
-                    "[command-code-proxy] loaded {} models from {}",
+                    "[cmdcode] loaded {} models from {}",
                     catalog.len(),
                     path.display()
                 );
@@ -127,7 +127,7 @@ pub fn get_model_catalog() -> &'static HashMap<ModelId, ModelMeta> {
         }
 
         // 3. Empty catalog — proxy still works, just /v1/models returns empty
-        eprintln!("[command-code-proxy] no models found (set COMMAND_CODE_PROXY_MODELS_CATALOG or install command-code CLI)");
+        eprintln!("[cmdcode] no models found (set COMMAND_CODE_PROXY_MODELS_CATALOG or install command-code CLI)");
         HashMap::new()
     })
 }

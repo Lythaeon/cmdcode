@@ -1135,7 +1135,7 @@ async fn test_chaos_through_proxy_truncated_mid_record_no_done() {
         .await
         .unwrap();
     assert!(
-        metrics.contains("command_code_proxy_truncated_streams_total 1"),
+        metrics.contains("cmdcode_truncated_streams_total 1"),
         "expected a truncated-stream metric, got: {}",
         metrics
     );
@@ -1357,10 +1357,10 @@ async fn test_e2e_metrics_endpoint() {
     assert!(ct.contains("text/plain"), "expected text/plain, got {ct}");
 
     let body = resp.text().await.unwrap();
-    assert!(body.contains("command_code_proxy_requests_total"));
-    assert!(body.contains("# TYPE command_code_proxy_requests_total counter"));
-    assert!(body.contains("command_code_proxy_active_streams"));
-    assert!(body.contains("# TYPE command_code_proxy_active_streams gauge"));
+    assert!(body.contains("cmdcode_requests_total"));
+    assert!(body.contains("# TYPE cmdcode_requests_total counter"));
+    assert!(body.contains("cmdcode_active_streams"));
+    assert!(body.contains("# TYPE cmdcode_active_streams gauge"));
 }
 
 #[tokio::test]

@@ -7,7 +7,7 @@
 #      cargo build --release
 #
 #   2. Copy the binary to a location in your PATH:
-#      cp target/release/command-code-proxy ~/.local/bin/
+#      cp target/release/cmdcode ~/.local/bin/
 #
 #   3. Copy this service file:
 #      cp systemd/command-code-proxy.service ~/.config/systemd/user/
@@ -35,7 +35,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/home/ac/.local/bin/command-code-proxy
+ExecStart=/home/ac/.local/bin/cmdcode
 Restart=on-failure
 RestartSec=3
 # The proxy's graceful shutdown can linger; stop it quickly so restarts
@@ -45,7 +45,7 @@ TimeoutStopSec=10
 StartLimitIntervalSec=10
 StartLimitBurst=5
 Environment=RUST_LOG=info
-Environment=COMMAND_CODE_PROXY_LOG_FILE=/home/ac/.local/bin/command-code-proxy-rotated.log
+Environment=COMMAND_CODE_PROXY_LOG_FILE=/home/ac/.local/bin/cmdcode-rotated.log
 
 [Install]
 WantedBy=default.target

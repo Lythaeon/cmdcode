@@ -33,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         tls = config.tls_cert.is_some(),
         auth_required = config.incoming_token.is_some(),
         log_file = config.log_file.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "stdout".into()),
-        "starting command-code-proxy"
+        "starting cmdcode"
     );
 
     let service = ProxyService::new(config, auth);

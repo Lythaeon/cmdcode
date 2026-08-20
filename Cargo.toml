@@ -7,10 +7,17 @@ members = [
 ]
 
 [workspace.package]
+name = "cmdcode"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/Lythaeon/command-code-openapi-proxy-rs"
+repository = "https://github.com/Lythaeon/cmdcode"
+homepage = "https://github.com/Lythaeon/cmdcode"
+documentation = "https://docs.rs/cmdcode"
+description = "OpenAI-compatible proxy for Command Code API"
+readme = "README.md"
+keywords = ["openai", "proxy", "llm", "command-code", "api"]
+categories = ["command-line-utilities", "network-programming"]
 
 [workspace.dependencies]
 proxy-core = { path = "crates/proxy-core" }

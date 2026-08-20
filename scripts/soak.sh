@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Long-duration memory/health soak for command-code-proxy.
+# Long-duration memory/health soak for cmdcode.
 #
 # Every SOAK_SAMPLE_SECS (default 300) it checks /health, issues one small
 # streaming chat request, and samples the proxy's RSS. Reports peak RSS and
@@ -13,7 +13,7 @@
 #   SOAK_RSS_GROWTH_MB  allowed RSS growth over baseline (default 200)
 #   SOAK_OUT            output log (default $BIN-soak.log)
 #   COMMAND_CODE_PROXY_BASE     proxy base URL (default http://127.0.0.1:18080)
-#   COMMAND_CODE_PROXY_BIN      proxy binary, to locate the process (default ~/.local/bin/command-code-proxy)
+#   COMMAND_CODE_PROXY_BIN      proxy binary, to locate the process (default ~/.local/bin/cmdcode)
 #   COMMAND_CODE_PROXY_INCOMING_TOKEN  token if the proxy enforces incoming auth
 #
 set -u
@@ -22,7 +22,7 @@ HOURS="${SOAK_HOURS:-24}"
 SAMPLE_SECS="${SOAK_SAMPLE_SECS:-300}"
 GROWTH_MB="${SOAK_RSS_GROWTH_MB:-200}"
 BASE="${COMMAND_CODE_PROXY_BASE:-http://127.0.0.1:18080}"
-BIN="${COMMAND_CODE_PROXY_BIN:-$HOME/.local/bin/command-code-proxy}"
+BIN="${COMMAND_CODE_PROXY_BIN:-$HOME/.local/bin/cmdcode}"
 OUT="${SOAK_OUT:-${BIN}-soak.log}"
 TOKEN="${COMMAND_CODE_PROXY_INCOMING_TOKEN:-}"
 
@@ -31,7 +31,7 @@ log() { printf '%s %s\n' "$(date -Is)" "$*" >>"$OUT"; }
 rss_of() {
     # RSS of the newest matching process (kB).
     local pid
-    pid=$(pgrep -f "[c]ommand-code-proxy$" | head -n1)
+    pid=$(pgrep -f "[c]mdcode$" | head -n1)
     [ -n "$pid" ] || { echo 0; return; }
     awk '/^VmRSS:/ {print $2}' "/proc/$pid/status" 2>/dev/null || echo 0
 }
