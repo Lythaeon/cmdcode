@@ -320,7 +320,7 @@ impl ProxyHttp for CommandCodeProxy {
                 // the concurrency permit immediately instead of waiting on
                 // Command Code to produce more data.
                 if client_gone || abort {
-                    cancel.notify_waiters();
+                    cancel.cancel();
                 }
 
                 if !client_gone {

@@ -1,8 +1,8 @@
 # command-code-openapi-proxy
 
 OpenAI-compatible proxy in front of Command Code's HTTP API. Use your
-Command Code subscription with **any** OpenAI-compatible toolchain -
-no vendor lock-in.
+Command Code subscription with **any** client supporting OpenAI Chat
+Completions - no vendor lock-in.
 
 ## What it does
 

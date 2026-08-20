@@ -15,7 +15,7 @@ pub enum UpstreamResponse {
     Json(serde_json::Value),
     Sse {
         rx: mpsc::Receiver<Result<String, String>>,
-        cancel: Arc<tokio::sync::Notify>,
+        cancel: tokio_util::sync::CancellationToken,
     },
 }
 
@@ -214,6 +214,7 @@ impl UpstreamClient {
                         let mut tool_calls = Vec::new();
                         let mut usage = CcUsage::default();
                         let mut finish_reason = FinishReason::Stop;
+                        let mut saw_finish = false;
 
                         for line in text.lines() {
                             let line = line.trim();
@@ -240,6 +241,7 @@ impl UpstreamClient {
                                         ));
                                     }
                                     "finish" => {
+                                        saw_finish = true;
                                         if let Some(u) = evt.total_usage {
                                             usage.input_tokens = u.input_tokens.unwrap_or(0);
                                             usage.output_tokens = u.output_tokens.unwrap_or(0);
@@ -269,6 +271,13 @@ impl UpstreamClient {
                             }
                         }
 
+                        if !saw_finish {
+                            return Err(UpstreamError::HttpError {
+                                status: 502,
+                                body: "upstream ended without finish event".into(),
+                            });
+                        }
+
                         return Ok(UpstreamResponse::Json(
                             serde_json::to_value(build_completion(
                                 model.as_str(),
@@ -287,7 +296,7 @@ impl UpstreamClient {
                         let (tx, rx) = mpsc::channel(256);
                         let stream = response.bytes_stream();
                         let model_str = model.as_str().to_string();
-                        let cancel = Arc::new(tokio::sync::Notify::new());
+                        let cancel = tokio_util::sync::CancellationToken::new();
                         let cancel_inner = cancel.clone();
                         let metrics = self.metrics.clone();
 
@@ -382,7 +391,7 @@ impl UpstreamClient {
                                             }
                                         }
                                     },
-                                    () = cancel_inner.notified() => {
+                                    () = cancel_inner.cancelled() => {
                                         // Downstream client disconnected or the
                                         // idle timer fired: abort immediately.
                                         return;
