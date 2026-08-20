@@ -37,6 +37,10 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-rustup-
 
+    - name: Install command-code CLI
+      run: |
+        npm install -g command-code
+
     - name: Rust cache
       uses: Swatinem/rust-cache@v2
       with:
