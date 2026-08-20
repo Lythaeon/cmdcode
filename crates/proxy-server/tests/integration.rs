@@ -22,6 +22,9 @@ struct MockUpstream {
     reset_after_chunks: Option<usize>,
     /// Omit the trailing newline on the final event (truncated line).
     no_final_newline: bool,
+    /// Garbage appended to the final event's line (making it unparseable),
+    /// used to simulate a stream truncated mid-record.
+    final_tail: Option<String>,
 }
 
 impl MockUpstream {
@@ -46,6 +49,7 @@ impl MockUpstream {
             chunk_gap_ms: 0,
             reset_after_chunks: None,
             no_final_newline: false,
+            final_tail: None,
         }
     }
 
@@ -59,6 +63,7 @@ impl MockUpstream {
         let chunk_gap = self.chunk_gap_ms;
         let reset_after = self.reset_after_chunks;
         let no_final_newline = self.no_final_newline;
+        let final_tail = self.final_tail;
         let counter = Arc::new(AtomicUsize::new(0));
 
         tokio::spawn(async move {
@@ -69,6 +74,7 @@ impl MockUpstream {
                 let counter = counter.clone();
                 let reset_after = reset_after;
                 let no_final_newline = no_final_newline;
+                let final_tail = final_tail.clone();
                 tokio::spawn(async move {
                     if let Some(n) = reset_after {
                         // Raw TCP handler: write the response head + first `n`
@@ -101,6 +107,7 @@ impl MockUpstream {
                     let events = events.clone();
                     let status_sequence = status_sequence.clone();
                     let counter = counter.clone();
+                    let final_tail = final_tail.clone();
                     Box::pin(async move {
                         // Consume request body
                         use http_body_util::BodyExt;
@@ -146,8 +153,8 @@ impl MockUpstream {
                             }
 
                             let frame_stream = futures::stream::unfold(
-                                (events.clone(), 0usize),
-                                move |(evts, i)| async move {
+                                (events.clone(), 0usize, final_tail.clone()),
+                                move |(evts, i, final_tail)| async move {
                                     if i >= evts.len() {
                                         return None;
                                     }
@@ -155,6 +162,9 @@ impl MockUpstream {
                                         tokio::time::sleep(std::time::Duration::from_millis(chunk_gap)).await;
                                     }
                                     let mut line = serde_json::to_string(&evts[i]).unwrap();
+                                    if final_tail.is_some() && i + 1 == evts.len() {
+                                        line.push_str(final_tail.as_deref().unwrap_or_default());
+                                    }
                                     if !(no_final_newline && i + 1 == evts.len()) {
                                         line.push('\n');
                                     }
@@ -162,7 +172,7 @@ impl MockUpstream {
                                         Ok::<_, std::io::Error>(hyper::body::Frame::data(
                                             bytes::Bytes::from(line),
                                         )),
-                                        (evts, i + 1),
+                                        (evts, i + 1, final_tail),
                                     ))
                                 },
                             );
@@ -966,6 +976,58 @@ async fn test_chaos_through_proxy_truncated_final_line() {
     assert_eq!(status, 200);
     assert!(body.contains("Hello"));
     assert!(body.contains("[DONE]"), "stream must terminate cleanly after truncated line");
+}
+
+#[tokio::test]
+async fn test_chaos_through_proxy_truncated_mid_record_no_done() {
+    // The final event line is cut mid-token and unterminated, so it cannot
+    // be parsed as a complete record. The proxy must NOT present this as a
+    // clean [DONE] completion, and must record a truncated-stream metric.
+    let mock = MockUpstream {
+        events: vec![
+            serde_json::json!({"type": "text-delta", "text": "partial"}),
+            serde_json::json!({"type": "finish", "finishReason": "stop"}),
+        ],
+        no_final_newline: true,
+        final_tail: Some(r#"{"unclosed"#.into()),
+        ..MockUpstream::normal()
+    };
+    let mock_addr = mock.start().await;
+    let proxy = start_proxy(mock_addr, 0, 180).await;
+
+    let (status, body) = proxy_chat(&proxy, CHAT_BODY).await;
+    assert_eq!(status, 200);
+    assert!(body.contains("partial"));
+    assert!(!body.contains("[DONE]"), "truncated stream must not end with [DONE]: {}", body);
+
+    // The truncated-stream counter must be non-zero.
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap();
+    let metrics = client.get(format!("{}/metrics", proxy)).send().await.unwrap().text().await.unwrap();
+    assert!(
+        metrics.contains("command_code_proxy_truncated_streams_total 1"),
+        "expected a truncated-stream metric, got: {}",
+        metrics
+    );
+}
+
+#[tokio::test]
+async fn test_auth_refresh_on_401_succeeds_once() {
+    // Upstream rejects the first request with 401 (stale credential), then
+    // accepts. With max_retries=0 the proxy must still refresh its auth cache
+    // and retry exactly once, ending in a 200.
+    let mock = MockUpstream {
+        status_sequence: Some(Arc::new(vec![401, 200])),
+        ..MockUpstream::normal()
+    };
+    let mock_addr = mock.start().await;
+    let proxy = start_proxy(mock_addr, 0, 180).await;
+
+    let (status, body) = proxy_chat(&proxy, CHAT_BODY).await;
+    assert_eq!(status, 200, "auth-refresh retry must succeed, got {status}: {body}");
+    assert!(body.contains("Hello"));
 }
 
 #[tokio::test]

@@ -13,7 +13,10 @@ use crate::metrics::Metrics;
 
 pub enum UpstreamResponse {
     Json(serde_json::Value),
-    Sse { rx: mpsc::Receiver<Result<String, String>> },
+    Sse {
+        rx: mpsc::Receiver<Result<String, String>>,
+        cancel: Arc<tokio::sync::Notify>,
+    },
 }
 
 /// Shared upstream client — connection pool + concurrency limiter.
@@ -63,7 +66,7 @@ impl UpstreamClient {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| ".".to_string());
 
-        let headers = self.auth
+        let mut headers = self.auth
             .build_headers(&cwd)
             .await
             .map_err(|e| UpstreamError::Io(std::io::Error::other(e.to_string())))?;
@@ -120,8 +123,10 @@ impl UpstreamClient {
 
         let mut last_err: Option<UpstreamError> = None;
         let max_attempts = 1 + self.config.max_retries;
+        let mut attempt = 0;
+        let mut auth_retried = false;
 
-        for attempt in 0..max_attempts {
+        while attempt < max_attempts {
             let mut req_builder = self.http.post(&url);
             for (k, v) in &headers {
                 req_builder = req_builder.header(k.as_str(), v.as_str());
@@ -137,11 +142,20 @@ impl UpstreamClient {
                             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body_text) {
                                 if let Some(err) = val.get("error") {
                                     let upstream_err = UpstreamError::HttpError { status, body: err.to_string() };
+                                    if is_auth_rejected(status) && !auth_retried {
+                                        self.auth.invalidate_cache().await;
+                                        headers = self.auth.build_headers(&cwd).await.map_err(|e| {
+                                            UpstreamError::Io(std::io::Error::other(e.to_string()))
+                                        })?;
+                                        auth_retried = true;
+                                        continue; // refresh once, not against the retry budget
+                                    }
                                     if is_retryable(status) && attempt + 1 < max_attempts {
                                         last_err = Some(upstream_err);
                                         let backoff = Duration::from_millis(100 * 2u64.pow(attempt));
                                         tokio::time::sleep(backoff).await;
                                         self.metrics.inc_retries();
+                                        attempt += 1;
                                         continue;
                                     }
                                     return Err(upstream_err);
@@ -149,11 +163,21 @@ impl UpstreamClient {
                             }
                         }
                         let upstream_err = UpstreamError::HttpError { status, body: body_text };
+                        if is_auth_rejected(status) && !auth_retried {
+                            self.auth.invalidate_cache().await;
+                            headers =
+                                self.auth.build_headers(&cwd).await.map_err(|e| {
+                                    UpstreamError::Io(std::io::Error::other(e.to_string()))
+                                })?;
+                            auth_retried = true;
+                            continue; // refresh once, not against the retry budget
+                        }
                         if is_retryable(status) && attempt + 1 < max_attempts {
                             last_err = Some(upstream_err);
                             let backoff = Duration::from_millis(100 * 2u64.pow(attempt));
                             tokio::time::sleep(backoff).await;
                             self.metrics.inc_retries();
+                            attempt += 1;
                             continue;
                         }
                         return Err(upstream_err);
@@ -212,14 +236,19 @@ impl UpstreamClient {
                         let (tx, rx) = mpsc::channel(256);
                         let stream = response.bytes_stream();
                         let model_str = model.as_str().to_string();
+                        let cancel = Arc::new(tokio::sync::Notify::new());
+                        let cancel_inner = cancel.clone();
+                        let metrics = self.metrics.clone();
 
                         tokio::spawn(async move {
                             use futures::StreamExt;
                             // Hold the concurrency permit for the full stream
                             // lifetime: it is released when this task exits
-                            // (stream ends, errors, or the client gives up),
-                            // not when forward_request returns.
+                            // (stream ends, errors, cancellation, or the client
+                            // gives up), not when forward_request returns.
                             let _ = _permit;
+                            let _ = metrics;
+                            let _ = cancel_inner;
                             let mut buffer = String::new();
                             let mut stream = std::pin::pin!(stream);
                             let created = chrono_now_secs();
@@ -229,41 +258,83 @@ impl UpstreamClient {
                                 created,
                                 model: &model_str,
                                 tool_index: 0,
+                                skipped: 0,
                             };
 
-                            while let Some(chunk_result) = stream.next().await {
-                                match chunk_result {
-                                    Ok(chunk) => {
-                                        buffer.push_str(&String::from_utf8_lossy(&chunk));
-                                        while let Some(newline_pos) = buffer.find('\n') {
-                                            let line = buffer[..newline_pos].trim().to_string();
-                                            buffer = buffer[newline_pos + 1..].to_string();
-                                            if line.is_empty() { continue; }
-
-                                            match translate_line(&line, &mut state) {
-                                                LineOutcome::Skip => {}
-                                                LineOutcome::Emit(payload) => {
-                                                    if tx.send(Ok(payload)).await.is_err() {
-                                                        return;
+                            let mut done = false;
+                            while !done {
+                                tokio::select! {
+                                    chunk = stream.next() => {
+                                        match chunk {
+                                            None => done = true, // clean upstream EOF
+                                            Some(Ok(b)) => {
+                                                buffer.push_str(&String::from_utf8_lossy(&b));
+                                                while let Some(pos) = buffer.find('\n') {
+                                                    let line = buffer[..pos].trim().to_string();
+                                                    buffer = buffer[pos + 1..].to_string();
+                                                    if line.is_empty() { continue; }
+                                                    match translate_line(&line, &mut state) {
+                                                        LineOutcome::Skip => {}
+                                                        LineOutcome::Emit(payload) => {
+                                                            if tx.send(Ok(payload)).await.is_err() {
+                                                                return;
+                                                            }
+                                                        }
+                                                        LineOutcome::EmitAndStop(payload) => {
+                                                            if tx.send(Ok(payload)).await.is_err() {
+                                                                return;
+                                                            }
+                                                            let _ = tx.send(Ok("data: [DONE]\n\n".to_string())).await;
+                                                            return;
+                                                        }
                                                     }
-                                                }
-                                                LineOutcome::EmitAndStop(payload) => {
-                                                    if tx.send(Ok(payload)).await.is_err() {
-                                                        return;
-                                                    }
-                                                    let _ = tx.send(Ok("data: [DONE]\n\n".to_string())).await;
-                                                    return;
                                                 }
                                             }
+                                            Some(Err(e)) => {
+                                                let _ = tx.send(Err(e.to_string())).await;
+                                                return;
+                                            }
                                         }
-                                    }
-                                    Err(e) => { let _ = tx.send(Err(e.to_string())).await; return; }
+                                    },
+                                    _ = cancel_inner.notified() => {
+                                        // Downstream client disconnected or the
+                                        // idle timer fired: abort immediately.
+                                        return;
+                                    },
                                 }
                             }
-                            let _ = tx.send(Ok("data: [DONE]\n\n".to_string())).await;
+
+                            // Clean EOF: flush any residual unterminated record.
+                            let residual = buffer.trim().to_string();
+                            if residual.is_empty() {
+                                let _ = tx.send(Ok("data: [DONE]\n\n".to_string())).await;
+                            } else {
+                                match translate_line(&residual, &mut state) {
+                                    LineOutcome::Skip => {
+                                        // Residual did not parse into a complete
+                                        // event — this is a truncated stream. Do
+                                        // not present it as a clean [DONE].
+                                        metrics.inc_truncated_stream();
+                                    }
+                                    LineOutcome::Emit(payload) => {
+                                        if tx.send(Ok(payload)).await.is_ok() {
+                                            let _ = tx.send(Ok("data: [DONE]\n\n".to_string())).await;
+                                        }
+                                    }
+                                    LineOutcome::EmitAndStop(payload) => {
+                                        let _ = tx.send(Ok(payload)).await;
+                                    }
+                                }
+                            }
+
+                            if state.skipped > 0 {
+                                for _ in 0..state.skipped {
+                                    metrics.inc_skipped();
+                                }
+                            }
                         });
 
-                        return Ok(UpstreamResponse::Sse { rx });
+                        return Ok(UpstreamResponse::Sse { rx, cancel });
                     }
                 }
                 Err(e) => {
@@ -282,6 +353,7 @@ impl UpstreamClient {
                         let backoff = Duration::from_millis(100 * 2u64.pow(attempt));
                         tokio::time::sleep(backoff).await;
                         self.metrics.inc_retries();
+                        attempt += 1;
                         continue;
                     }
                     return Err(upstream_err);
@@ -295,6 +367,12 @@ impl UpstreamClient {
 
 fn is_retryable(status: u16) -> bool {
     matches!(status, 502..=504)
+}
+
+/// A 401/403 upstream response means our cached credential is stale — refresh
+/// it and retry once (handled separately from the network-retry budget).
+fn is_auth_rejected(status: u16) -> bool {
+    status == 401 || status == 403
 }
 
 /// Build the config block the upstream requires (workingDir, date, ...).
@@ -340,6 +418,8 @@ pub struct StreamState<'a> {
     pub created: i64,
     pub model: &'a str,
     pub tool_index: u32,
+    /// Number of malformed / unknown upstream events skipped so far.
+    pub skipped: u32,
 }
 
 /// Result of translating a single upstream NDJSON line.
@@ -363,7 +443,10 @@ pub fn translate_line(line: &str, state: &mut StreamState) -> LineOutcome {
 
     let evt = match serde_json::from_str::<UpstreamEvent>(line) {
         Ok(e) => e,
-        Err(_) => return LineOutcome::Skip,
+        Err(_) => {
+            state.skipped += 1;
+            return LineOutcome::Skip;
+        }
     };
 
     let chunk = match evt.event_type.as_str() {
@@ -480,7 +563,10 @@ pub fn translate_line(line: &str, state: &mut StreamState) -> LineOutcome {
                 format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap_or_default()),
             );
         }
-        _ => return LineOutcome::Skip,
+        _ => {
+            state.skipped += 1;
+            return LineOutcome::Skip;
+        }
     };
 
     LineOutcome::Emit(format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap_or_default()))
@@ -538,6 +624,7 @@ mod tests {
             created: 12345,
             model,
             tool_index: 0,
+            skipped: 0,
         }
     }
 
@@ -764,6 +851,7 @@ mod tests {
                 created: 12345,
                 model: "m",
                 tool_index: 0,
+                skipped: 0,
             };
             match translate_line(&line, &mut s) {
                 LineOutcome::Skip => {}

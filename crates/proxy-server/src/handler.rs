@@ -232,7 +232,7 @@ impl ProxyHttp for CommandCodeProxy {
                 self.send_json(session, 200, &completion).await?;
                 Ok(true)
             }
-            Ok(upstream::UpstreamResponse::Sse { mut rx }) => {
+            Ok(upstream::UpstreamResponse::Sse { mut rx, cancel }) => {
                 tracing::info!(
                     request_id = %ctx.request_id.as_str(),
                     elapsed_ms = start.elapsed().as_millis() as u64,
@@ -250,6 +250,7 @@ impl ProxyHttp for CommandCodeProxy {
                 let mut chunks = 0u32;
                 let mut bytes_out = 0usize;
                 let mut client_gone = false;
+                let mut abort = false;
                 loop {
                     let recv = tokio::time::timeout(idle_timeout, rx.recv()).await;
                     match recv {
@@ -270,6 +271,7 @@ impl ProxyHttp for CommandCodeProxy {
                         Ok(Some(Err(e))) => {
                             tracing::error!(request_id = %ctx.request_id.as_str(), error = %e, "stream error");
                             self.metrics.inc_error();
+                            abort = true;
                             break;
                         }
                         Ok(None) => break,
@@ -280,9 +282,19 @@ impl ProxyHttp for CommandCodeProxy {
                                 idle_secs = idle_timeout.as_secs(),
                                 "stream idle timeout; aborting"
                             );
+                            abort = true;
                             break;
                         }
                     }
+                }
+
+                // If we are not ending the stream naturally (the upstream task
+                // already sent [DONE] and closed the channel), signal its
+                // cancellation so it drops the reqwest connection and releases
+                // the concurrency permit immediately instead of waiting on
+                // Command Code to produce more data.
+                if client_gone || abort {
+                    cancel.notify_waiters();
                 }
 
                 if !client_gone {

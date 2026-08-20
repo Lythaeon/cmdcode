@@ -20,6 +20,8 @@ pub struct Metrics {
     pub unknown_routes: AtomicU64,
     pub client_disconnects: AtomicU64,
     pub upstream_timeouts: AtomicU64,
+    pub skipped_events: AtomicU64,
+    pub truncated_streams: AtomicU64,
     pub active_streams: AtomicI64,
     started_at: SystemTime,
 }
@@ -46,6 +48,8 @@ impl Metrics {
             unknown_routes: AtomicU64::new(0),
             client_disconnects: AtomicU64::new(0),
             upstream_timeouts: AtomicU64::new(0),
+            skipped_events: AtomicU64::new(0),
+            truncated_streams: AtomicU64::new(0),
             active_streams: AtomicI64::new(0),
             started_at: SystemTime::now(),
         }
@@ -105,6 +109,14 @@ impl Metrics {
     pub fn inc_upstream_timeout(&self) {
         self.upstream_timeouts.fetch_add(1, Ordering::Relaxed);
         self.inc_error();
+    }
+
+    pub fn inc_skipped(&self) {
+        self.skipped_events.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_truncated_stream(&self) {
+        self.truncated_streams.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn stream_started(&self) {
@@ -239,6 +251,20 @@ impl Metrics {
         );
         line(
             &mut out,
+            "Upstream events skipped as malformed or unknown.",
+            "command_code_proxy_skipped_events_total",
+            self.skipped_events.load(Ordering::Relaxed).to_string(),
+            "counter",
+        );
+        line(
+            &mut out,
+            "Streams ending with a truncated final record.",
+            "command_code_proxy_truncated_streams_total",
+            self.truncated_streams.load(Ordering::Relaxed).to_string(),
+            "counter",
+        );
+        line(
+            &mut out,
             "Streams currently open.",
             "command_code_proxy_active_streams",
             self.active_streams.load(Ordering::Relaxed).to_string(),
@@ -278,6 +304,8 @@ mod tests {
             "command_code_proxy_unknown_routes_total",
             "command_code_proxy_client_disconnects_total",
             "command_code_proxy_upstream_timeouts_total",
+            "command_code_proxy_skipped_events_total",
+            "command_code_proxy_truncated_streams_total",
             "command_code_proxy_active_streams",
             "command_code_proxy_uptime_seconds",
         ] {

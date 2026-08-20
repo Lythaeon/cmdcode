@@ -117,6 +117,14 @@ impl AuthManager {
             .unwrap_or_default()
     }
 
+    /// Drop the cached auth so the next read re-reads `auth.json`.
+    /// Used when the upstream rejects a credential (401/403) so the proxy
+    /// does not keep using a stale cached key until the TTL expires.
+    pub async fn invalidate_cache(&self) {
+        let mut state = self.state.write().await;
+        *state = None;
+    }
+
     pub async fn health_check(&self) -> HashMap<String, serde_json::Value> {
         let mut result = HashMap::new();
         result.insert(
