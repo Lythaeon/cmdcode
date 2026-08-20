@@ -296,6 +296,11 @@ impl UpstreamClient {
                             let _ = metrics;
                             let _ = cancel_inner;
                             let mut buffer = String::new();
+                            // Cursor into `buffer` for the unconsumed portion.
+                            // We search from here and only drain the consumed
+                            // prefix once per chunk (amortized) instead of
+                            // re-copying the whole remaining buffer per line.
+                            let mut start = 0usize;
                             let mut stream = std::pin::pin!(stream);
                             let created = chrono_now_secs();
                             let completion_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
@@ -315,25 +320,36 @@ impl UpstreamClient {
                                             None => done = true, // clean upstream EOF
                                             Some(Ok(b)) => {
                                                 buffer.push_str(&String::from_utf8_lossy(&b));
-                                                while let Some(pos) = buffer.find('\n') {
-                                                    let line = buffer[..pos].trim().to_string();
-                                                    buffer = buffer[pos + 1..].to_string();
-                                                    if line.is_empty() { continue; }
-                                                    match translate_line(&line, &mut state) {
-                                                        LineOutcome::Skip => {}
-                                                        LineOutcome::Emit(payload) => {
-                                                            if tx.send(Ok(payload)).await.is_err() {
-                                                                return;
+                                                loop {
+                                                    let rel = buffer[start..].find('\n');
+                                                    match rel {
+                                                        Some(rel) => {
+                                                            let abs = start + rel;
+                                                            let line = buffer[start..abs].trim();
+                                                            start = abs + 1;
+                                                            if line.is_empty() { continue; }
+                                                            match translate_line(line, &mut state) {
+                                                                LineOutcome::Skip => {}
+                                                                LineOutcome::Emit(payload) => {
+                                                                    if tx.send(Ok(payload)).await.is_err() {
+                                                                        return;
+                                                                    }
+                                                                }
+                                                                LineOutcome::EmitAndStop(payload) => {
+                                                                    if tx.send(Ok(payload)).await.is_err() {
+                                                                        return;
+                                                                    }
+                                                                    let _ = tx.send(Ok("data: [DONE]\n\n".to_string())).await;
+                                                                    return;
+                                                                }
                                                             }
                                                         }
-                                                        LineOutcome::EmitAndStop(payload) => {
-                                                            if tx.send(Ok(payload)).await.is_err() {
-                                                                return;
-                                                            }
-                                                            let _ = tx.send(Ok("data: [DONE]\n\n".to_string())).await;
-                                                            return;
-                                                        }
+                                                        None => break,
                                                     }
+                                                }
+                                                if start > 0 {
+                                                    buffer.drain(..start);
+                                                    start = 0;
                                                 }
                                             }
                                             Some(Err(e)) => {
@@ -351,7 +367,7 @@ impl UpstreamClient {
                             }
 
                             // Clean EOF: flush any residual unterminated record.
-                            let residual = buffer.trim().to_string();
+                            let residual = buffer[start..].trim().to_string();
                             if residual.is_empty() {
                                 let _ = tx.send(Ok("data: [DONE]\n\n".to_string())).await;
                             } else {
@@ -428,6 +444,43 @@ fn is_auth_rejected(status: u16) -> bool {
     status == 401 || status == 403
 }
 
+/// Directory listing of `cwd` (non-hidden entries), cached for a short TTL so
+/// it is not re-read on every request. `build_config` is called once per
+/// upstream request; on a hot loopback this avoids a syscall-heavy `read_dir`
+/// each time. The TTL keeps the listing fresh enough to reflect new files.
+const STRUCTURE_CACHE_TTL_SECS: u64 = 5;
+
+fn cached_structure(cwd: &str) -> Vec<String> {
+    use std::sync::Mutex;
+
+    static CACHE: Mutex<Option<(String, std::time::Instant, Vec<String>)>> = Mutex::new(None);
+
+    let now = std::time::Instant::now();
+    let mut guard = match CACHE.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+
+    if let Some((cached_cwd, cached_at, cached)) = guard.as_ref() {
+        if cached_cwd == cwd && cached_at.elapsed().as_secs() < STRUCTURE_CACHE_TTL_SECS {
+            return cached.clone();
+        }
+    }
+
+    let structure: Vec<String> = std::fs::read_dir(cwd)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .filter(|n| !n.starts_with('.'))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    *guard = Some((cwd.to_string(), now, structure.clone()));
+    structure
+}
+
 /// Build the config block the upstream requires (workingDir, date, ...).
 /// No subprocess calls — git state is reported as clean/non-repo.
 fn build_config(cwd: &str) -> serde_json::Value {
@@ -442,15 +495,7 @@ fn build_config(cwd: &str) -> serde_json::Value {
         })
         .unwrap_or_default();
 
-    let structure: Vec<String> = std::fs::read_dir(cwd)
-        .map(|entries| {
-            entries
-                .filter_map(|e| e.ok())
-                .map(|e| e.file_name().to_string_lossy().to_string())
-                .filter(|n| !n.starts_with('.'))
-                .collect()
-        })
-        .unwrap_or_default();
+    let structure = cached_structure(cwd);
 
     serde_json::json!({
         "workingDir": cwd,
@@ -1077,5 +1122,27 @@ mod tests {
         assert_eq!(sem.available_permits(), 0);
         drop(permit);
         assert_eq!(sem.available_permits(), 1, "permit must return on drop");
+    }
+
+    #[test]
+    fn test_cached_structure_lists_and_excludes_hidden() {
+        let tmp =
+            std::env::temp_dir().join(format!("cc-proxy-struct-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("file.txt"), "x").unwrap();
+        std::fs::write(tmp.join(".hidden"), "y").unwrap();
+        std::fs::create_dir(tmp.join("sub")).unwrap();
+
+        let cwd = tmp.display().to_string();
+        let listing = cached_structure(&cwd);
+        assert!(listing.contains(&"file.txt".to_string()));
+        assert!(listing.contains(&"sub".to_string()));
+        assert!(
+            !listing.contains(&".hidden".to_string()),
+            "hidden entries must be excluded"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
