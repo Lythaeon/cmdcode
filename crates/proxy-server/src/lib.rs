@@ -111,6 +111,7 @@ fn extract_port(url: &str) -> u16 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use std::path::PathBuf;

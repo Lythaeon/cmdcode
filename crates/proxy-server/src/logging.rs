@@ -138,6 +138,7 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for RotatingLog {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};

@@ -284,10 +284,10 @@ impl ProxyHttp for CommandCodeProxy {
                                     if is_client_disconnect(&e) {
                                         tracing::warn!(request_id = %ctx.request_id.as_str(), "client disconnected; aborting stream");
                                         self.metrics.inc_client_disconnect();
-                                        client_gone = true;
                                     } else {
-                                        return Err(e);
+                                        tracing::warn!(request_id = %ctx.request_id.as_str(), error = %e, "non-disconnect write error; aborting stream");
                                     }
+                                    client_gone = true;
                                     break;
                                 }
                                 chunks += 1;

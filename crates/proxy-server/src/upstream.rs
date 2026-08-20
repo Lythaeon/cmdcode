@@ -29,6 +29,7 @@ pub struct UpstreamClient {
 }
 
 impl UpstreamClient {
+    #[allow(clippy::expect_used)]
     pub fn new(config: Arc<ProxyConfig>, auth: Arc<AuthManager>, metrics: Arc<Metrics>) -> Self {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(config.upstream_timeout_secs))
@@ -54,6 +55,7 @@ impl UpstreamClient {
         }
     }
 
+    #[allow(clippy::expect_used)]
     pub async fn forward_request(
         &self,
         model: &ModelId,
@@ -276,7 +278,10 @@ impl UpstreamClient {
                                 finish_reason,
                                 &usage,
                             ))
-                            .unwrap(),
+                            .map_err(|e| UpstreamError::HttpError {
+                                status: 502,
+                                body: format!("response serialization: {e}"),
+                            })?,
                         ));
                     } else {
                         let (tx, rx) = mpsc::channel(256);
@@ -377,7 +382,7 @@ impl UpstreamClient {
                                             }
                                         }
                                     },
-                                    _ = cancel_inner.notified() => {
+                                    () = cancel_inner.notified() => {
                                         // Downstream client disconnected or the
                                         // idle timer fired: abort immediately.
                                         return;
@@ -747,6 +752,7 @@ fn extract_system(messages: &[proxy_core::wire_format::OpenAiMessage]) -> Option
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

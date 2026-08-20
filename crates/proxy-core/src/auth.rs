@@ -40,15 +40,6 @@ pub enum AuthMethod {
     OAuth { token: String, provider: String },
 }
 
-impl AuthMethod {
-    pub fn is_valid(&self) -> bool {
-        match self {
-            AuthMethod::ApiKey(key) => key.len() > 10,
-            AuthMethod::OAuth { token, .. } => token.len() > 10,
-        }
-    }
-}
-
 /// Cached auth state with TTL.
 #[derive(Debug)]
 struct CachedAuth {
@@ -134,8 +125,8 @@ impl AuthManager {
         let auth_content =
             tokio::fs::read_to_string(&auth_file)
                 .await
-                .map_err(|_| AuthError::FileNotFound {
-                    path: auth_file.display().to_string(),
+                .map_err(|e| AuthError::FileNotFound {
+                    path: format!("{}: {e}", auth_file.display()),
                 })?;
 
         let auth: AuthData =
@@ -227,6 +218,7 @@ impl AuthManager {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
     use tempfile::TempDir;

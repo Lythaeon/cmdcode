@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Property-based tests for proxy-core translation logic.
 //!
 //! These verify invariants that hold for arbitrary inputs — the proxy must

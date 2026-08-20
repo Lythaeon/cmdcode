@@ -31,9 +31,19 @@ impl ProxyConfig {
     pub fn from_env() -> Result<Self, ConfigError> {
         let listen_host =
             env::var("COMMAND_CODE_PROXY_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+        if listen_host.contains(':') || listen_host.contains(char::is_whitespace) {
+            return Err(ConfigError::InvalidListenAddress(format!(
+                "COMMAND_CODE_PROXY_HOST contains invalid characters: {listen_host:?}"
+            )));
+        }
         let listen_port =
             env::var("COMMAND_CODE_PROXY_PORT").unwrap_or_else(|_| "18080".to_string());
-        let listen_addr = format!("{}:{}", listen_host, listen_port);
+        let port: u16 = listen_port.parse().map_err(|e| {
+            ConfigError::InvalidListenAddress(format!(
+                "COMMAND_CODE_PROXY_PORT is not a valid port: {listen_port:?}: {e}"
+            ))
+        })?;
+        let listen_addr = format!("{}:{port}", listen_host);
 
         let upstream_url = env::var("COMMAND_CODE_API_BASE")
             .unwrap_or_else(|_| "https://api.commandcode.ai".to_string());
@@ -44,17 +54,23 @@ impl ProxyConfig {
         let upstream_timeout_secs = env::var("COMMAND_CODE_PROXY_TIMEOUT")
             .unwrap_or_else(|_| "600".to_string())
             .parse()
-            .map_err(|_| ConfigError::InvalidTimeout("COMMAND_CODE_PROXY_TIMEOUT".into()))?;
+            .map_err(|e| ConfigError::InvalidTimeout(format!(
+                "COMMAND_CODE_PROXY_TIMEOUT: {e}"
+            )))?;
 
         let max_retries = env::var("COMMAND_CODE_PROXY_RETRIES")
             .unwrap_or_else(|_| "2".to_string())
             .parse()
-            .map_err(|_| ConfigError::InvalidTimeout("COMMAND_CODE_PROXY_RETRIES".into()))?;
+            .map_err(|e| ConfigError::InvalidTimeout(format!(
+                "COMMAND_CODE_PROXY_RETRIES: {e}"
+            )))?;
 
         let max_concurrent = env::var("COMMAND_CODE_PROXY_MAX_REQS")
             .unwrap_or_else(|_| "0".to_string())
             .parse()
-            .map_err(|_| ConfigError::InvalidTimeout("COMMAND_CODE_PROXY_MAX_REQS".into()))?;
+            .map_err(|e| ConfigError::InvalidTimeout(format!(
+                "COMMAND_CODE_PROXY_MAX_REQS: {e}"
+            )))?;
 
         let cors_origin = env::var("COMMAND_CODE_PROXY_CORS").ok();
 
