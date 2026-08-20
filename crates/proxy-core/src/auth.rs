@@ -111,10 +111,7 @@ impl AuthManager {
         }
 
         let state = self.state.read().await;
-        state
-            .as_ref()
-            .map(|c| c.config.clone())
-            .unwrap_or_default()
+        state.as_ref().map(|c| c.config.clone()).unwrap_or_default()
     }
 
     /// Drop the cached auth so the next read re-reads `auth.json`.
@@ -169,18 +166,18 @@ impl AuthManager {
             });
         }
 
-        let auth_content = tokio::fs::read_to_string(&auth_file)
-            .await
-            .map_err(|_| AuthError::FileNotFound {
-                path: auth_file.display().to_string(),
-            })?;
+        let auth_content =
+            tokio::fs::read_to_string(&auth_file)
+                .await
+                .map_err(|_| AuthError::FileNotFound {
+                    path: auth_file.display().to_string(),
+                })?;
 
-        let auth: AuthData = serde_json::from_str(&auth_content).map_err(|e| {
-            AuthError::InvalidJson {
+        let auth: AuthData =
+            serde_json::from_str(&auth_content).map_err(|e| AuthError::InvalidJson {
                 path: auth_file.display().to_string(),
                 source: e,
-            }
-        })?;
+            })?;
 
         let config_file = self.auth_dir.join("config.json");
         let config = if config_file.exists() {
@@ -219,10 +216,7 @@ impl AuthManager {
     }
 
     /// Build HTTP headers matching the CLI fingerprint.
-    pub async fn build_headers(
-        &self,
-        cwd: &str,
-    ) -> Result<HashMap<String, String>, AuthError> {
+    pub async fn build_headers(&self, cwd: &str) -> Result<HashMap<String, String>, AuthError> {
         let method = self.get_auth_method().await?;
         let config = self.get_config().await;
         let session_id = SessionId::generate();
@@ -238,23 +232,16 @@ impl AuthManager {
         headers.insert("x-command-code-version".into(), "1.0.0".into());
         headers.insert(
             "x-cli-environment".into(),
-            std::env::var("COMMAND_CODE_ENV")
-                .unwrap_or_else(|_| "production".into()),
+            std::env::var("COMMAND_CODE_ENV").unwrap_or_else(|_| "production".into()),
         );
         headers.insert("x-project-slug".into(), project_slug.into());
         headers.insert(
             "x-taste-learning".into(),
-            config
-                .taste_learning
-                .unwrap_or(true)
-                .to_string(),
+            config.taste_learning.unwrap_or(true).to_string(),
         );
         headers.insert(
             "x-co-flag".into(),
-            config
-                .oauth_enforced
-                .unwrap_or(false)
-                .to_string(),
+            config.oauth_enforced.unwrap_or(false).to_string(),
         );
         headers.insert("x-session-id".into(), session_id.as_str().into());
 
@@ -326,21 +313,13 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let auth_dir = tmp.path().join(".commandcode");
         std::fs::create_dir_all(&auth_dir).unwrap();
-        std::fs::write(
-            auth_dir.join("auth.json"),
-            r#"{"apiKey":"key1"}"#,
-        )
-        .unwrap();
+        std::fs::write(auth_dir.join("auth.json"), r#"{"apiKey":"key1"}"#).unwrap();
 
         let mgr = AuthManager::new(auth_dir.clone(), 60);
         let _ = mgr.get_auth_method().await.unwrap();
 
         // Change file — should not be visible until cache expires
-        std::fs::write(
-            auth_dir.join("auth.json"),
-            r#"{"apiKey":"key2"}"#,
-        )
-        .unwrap();
+        std::fs::write(auth_dir.join("auth.json"), r#"{"apiKey":"key2"}"#).unwrap();
 
         let method = mgr.get_auth_method().await.unwrap();
         match method {
@@ -354,11 +333,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let auth_dir = tmp.path().join(".commandcode");
         std::fs::create_dir_all(&auth_dir).unwrap();
-        std::fs::write(
-            auth_dir.join("auth.json"),
-            r#"{"apiKey":"my-api-key"}"#,
-        )
-        .unwrap();
+        std::fs::write(auth_dir.join("auth.json"), r#"{"apiKey":"my-api-key"}"#).unwrap();
 
         let mgr = AuthManager::new(auth_dir, 30);
         let headers = mgr.build_headers("/tmp/test").await.unwrap();

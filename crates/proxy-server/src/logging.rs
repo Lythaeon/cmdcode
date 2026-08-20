@@ -72,16 +72,17 @@ impl RotatingFile {
         if Path::new(&self.path).exists() {
             std::fs::rename(&self.path, backup(1))?;
         }
-        let new_file = OpenOptions::new().create(true).append(true).open(&self.path)?;
+        let new_file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)?;
         self.file = new_file;
         self.size = 0;
         Ok(())
     }
 
     fn write_inner(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if self.size + buf.len() as u64 > self.max_bytes
-            && (buf.len() as u64) < self.max_bytes
-        {
+        if self.size + buf.len() as u64 > self.max_bytes && (buf.len() as u64) < self.max_bytes {
             self.rotate()?;
         }
         let n = self.file.write(buf)?;
@@ -159,17 +160,33 @@ mod tests {
         let mut rf = RotatingFile::open(&path, 64, 3).expect("open");
 
         for i in 0..20 {
-            rf.write_inner(format!("line {i:04}\n").as_bytes()).expect("write");
+            rf.write_inner(format!("line {i:04}\n").as_bytes())
+                .expect("write");
         }
 
         assert!(path.exists(), "active file must exist");
-        assert!(Path::new(&format!("{}.1", path.display())).exists(), ".1 must exist");
-        assert!(Path::new(&format!("{}.2", path.display())).exists(), ".2 must exist");
-        assert!(Path::new(&format!("{}.3", path.display())).exists(), ".3 must exist");
-        assert!(!Path::new(&format!("{}.4", path.display())).exists(), ".4 must not exist");
+        assert!(
+            Path::new(&format!("{}.1", path.display())).exists(),
+            ".1 must exist"
+        );
+        assert!(
+            Path::new(&format!("{}.2", path.display())).exists(),
+            ".2 must exist"
+        );
+        assert!(
+            Path::new(&format!("{}.3", path.display())).exists(),
+            ".3 must exist"
+        );
+        assert!(
+            !Path::new(&format!("{}.4", path.display())).exists(),
+            ".4 must not exist"
+        );
 
         let active_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        assert!(active_size <= 64, "active file should be small, got {active_size}");
+        assert!(
+            active_size <= 64,
+            "active file should be small, got {active_size}"
+        );
     }
 
     #[test]
@@ -178,7 +195,8 @@ mod tests {
         let mut rf = RotatingFile::open(&path, 64, 2).expect("open");
 
         for i in 0..40 {
-            rf.write_inner(format!("line {i:04}\n").as_bytes()).expect("write");
+            rf.write_inner(format!("line {i:04}\n").as_bytes())
+                .expect("write");
         }
 
         assert!(Path::new(&format!("{}.1", path.display())).exists());
@@ -208,6 +226,9 @@ mod tests {
         let big = vec![b'x'; 500];
         rf.write_inner(&big).expect("write");
         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        assert_eq!(size, 500, "oversized line must pass through without rotating");
+        assert_eq!(
+            size, 500,
+            "oversized line must pass through without rotating"
+        );
     }
 }

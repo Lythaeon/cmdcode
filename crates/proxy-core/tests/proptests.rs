@@ -6,11 +6,11 @@
 
 use proptest::prelude::*;
 use proxy_core::types::{Effort, FinishReason};
-use proxy_core::wire_format::{
-    build_completion, wire_messages, CcUsage, FinishReason as WireFinishReason,
-    OpenAiMessage, OpenAiTool,
-};
 use proxy_core::wire_format::UpstreamEvent;
+use proxy_core::wire_format::{
+    build_completion, wire_messages, CcUsage, FinishReason as WireFinishReason, OpenAiMessage,
+    OpenAiTool,
+};
 
 /// Arbitrary roles, including hostile ones the upstream might never send.
 fn any_role() -> impl Strategy<Value = String> {
@@ -26,18 +26,16 @@ fn any_role() -> impl Strategy<Value = String> {
 fn any_message() -> impl Strategy<Value = OpenAiMessage> {
     (
         any_role(),
-        proptest::option::of(
-            prop_oneof![
-                "[a-zA-Z0-9 ]{0,64}".prop_map(serde_json::Value::String),
-                proptest::collection::vec(
-                    proptest::collection::vec(any::<u8>(), 0..16).prop_map(|b| {
-                        serde_json::Value::String(String::from_utf8_lossy(&b).to_string())
-                    }),
-                    0..8,
-                )
-                .prop_map(serde_json::Value::Array),
-            ],
-        ),
+        proptest::option::of(prop_oneof![
+            "[a-zA-Z0-9 ]{0,64}".prop_map(serde_json::Value::String),
+            proptest::collection::vec(
+                proptest::collection::vec(any::<u8>(), 0..16).prop_map(|b| {
+                    serde_json::Value::String(String::from_utf8_lossy(&b).to_string())
+                }),
+                0..8,
+            )
+            .prop_map(serde_json::Value::Array),
+        ]),
         proptest::option::of("[a-zA-Z0-9_-]{0,24}"),
     )
         .prop_map(|(role, content, tool_call_id)| OpenAiMessage {
@@ -50,16 +48,20 @@ fn any_message() -> impl Strategy<Value = OpenAiMessage> {
 
 fn any_tool() -> impl Strategy<Value = OpenAiTool> {
     (
-        "[a-z_]{0,16}".prop_map(|s| if s.is_empty() { "function".to_string() } else { s }),
+        "[a-z_]{0,16}".prop_map(|s| {
+            if s.is_empty() {
+                "function".to_string()
+            } else {
+                s
+            }
+        }),
         proptest::option::of("[a-zA-Z0-9_-]{0,32}"),
-        proptest::option::of(
-            prop_oneof![
-                Just(serde_json::json!({"type": "object"})),
-                Just(serde_json::json!({"type": "object", "properties": {"x": {"type": "string"}}})),
-                proptest::collection::vec(any::<u8>(), 0..32)
-                    .prop_map(|b| serde_json::Value::String(String::from_utf8_lossy(&b).to_string())),
-            ],
-        ),
+        proptest::option::of(prop_oneof![
+            Just(serde_json::json!({"type": "object"})),
+            Just(serde_json::json!({"type": "object", "properties": {"x": {"type": "string"}}})),
+            proptest::collection::vec(any::<u8>(), 0..32)
+                .prop_map(|b| serde_json::Value::String(String::from_utf8_lossy(&b).to_string())),
+        ]),
     )
         .prop_map(|(tool_type, name, parameters)| OpenAiTool {
             tool_type,

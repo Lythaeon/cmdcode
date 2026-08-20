@@ -69,8 +69,7 @@ impl Metrics {
     }
 
     pub fn inc_bytes_out(&self, n: usize) {
-        self.bytes_out_total
-            .fetch_add(n as u64, Ordering::Relaxed);
+        self.bytes_out_total.fetch_add(n as u64, Ordering::Relaxed);
     }
 
     pub fn inc_retries(&self) {
@@ -129,10 +128,7 @@ impl Metrics {
 
     /// Uptime in whole seconds since construction.
     pub fn uptime_secs(&self) -> u64 {
-        self.started_at
-            .elapsed()
-            .map(|d| d.as_secs())
-            .unwrap_or(0)
+        self.started_at.elapsed().map(|d| d.as_secs()).unwrap_or(0)
     }
 
     /// Render all metrics in Prometheus text exposition format.
@@ -195,7 +191,9 @@ impl Metrics {
             &mut out,
             "Upstream retry attempts made.",
             "command_code_proxy_upstream_retries_total",
-            self.upstream_retries_total.load(Ordering::Relaxed).to_string(),
+            self.upstream_retries_total
+                .load(Ordering::Relaxed)
+                .to_string(),
             "counter",
         );
         line(
@@ -237,9 +235,7 @@ impl Metrics {
             &mut out,
             "Client disconnects mid-stream.",
             "command_code_proxy_client_disconnects_total",
-            self.client_disconnects
-                .load(Ordering::Relaxed)
-                .to_string(),
+            self.client_disconnects.load(Ordering::Relaxed).to_string(),
             "counter",
         );
         line(
@@ -311,7 +307,11 @@ mod tests {
         ] {
             assert!(text.contains(name), "missing metric {name}");
             let kind = if name.ends_with("_total") || name == "command_code_proxy_active_streams" {
-                if name == "command_code_proxy_active_streams" { "gauge" } else { "counter" }
+                if name == "command_code_proxy_active_streams" {
+                    "gauge"
+                } else {
+                    "counter"
+                }
             } else {
                 "gauge"
             };

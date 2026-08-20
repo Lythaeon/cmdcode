@@ -210,9 +210,9 @@ pub fn wire_tools(tools: &[OpenAiTool]) -> Vec<CcTool> {
                     CcTool {
                         name: func.name.clone(),
                         description: func.description.clone().unwrap_or_default(),
-                        input_schema: func.parameters.clone().unwrap_or_else(|| {
-                            serde_json::json!({"type": "object", "properties": {}})
-                        }),
+                        input_schema: func.parameters.clone().unwrap_or_else(
+                            || serde_json::json!({"type": "object", "properties": {}}),
+                        ),
                     }
                 } else {
                     CcTool {
@@ -222,9 +222,9 @@ pub fn wire_tools(tools: &[OpenAiTool]) -> Vec<CcTool> {
                             .input_schema
                             .clone()
                             .or_else(|| t.parameters.clone())
-                            .unwrap_or_else(|| {
-                                serde_json::json!({"type": "object", "properties": {}})
-                            }),
+                            .unwrap_or_else(
+                                || serde_json::json!({"type": "object", "properties": {}}),
+                            ),
                     }
                 }
             } else {
@@ -235,9 +235,7 @@ pub fn wire_tools(tools: &[OpenAiTool]) -> Vec<CcTool> {
                         .input_schema
                         .clone()
                         .or_else(|| t.parameters.clone())
-                        .unwrap_or_else(|| {
-                            serde_json::json!({"type": "object", "properties": {}})
-                        }),
+                        .unwrap_or_else(|| serde_json::json!({"type": "object", "properties": {}})),
                 }
             }
         })
@@ -293,9 +291,10 @@ pub fn wire_messages(messages: &[OpenAiMessage]) -> Vec<CcMessage> {
             }
             "tool" => {
                 let tc_id = msg.tool_call_id.clone().unwrap_or_default();
-                let tool_name = tool_name_map.get(&tc_id).cloned().unwrap_or_else(|| {
-                    extract_text_content(&msg.content)
-                });
+                let tool_name = tool_name_map
+                    .get(&tc_id)
+                    .cloned()
+                    .unwrap_or_else(|| extract_text_content(&msg.content));
 
                 let items = if let Some(ref content) = msg.content {
                     if let Some(arr) = content.as_array() {
@@ -340,7 +339,9 @@ pub fn wire_messages(messages: &[OpenAiMessage]) -> Vec<CcMessage> {
                     match serde_json::from_value::<CcContentItem>(v) {
                         Ok(item) => cc_items.push(item),
                         Err(e) => {
-                            eprintln!("[command-code-proxy] warning: failed to parse tool result: {e}");
+                            eprintln!(
+                                "[command-code-proxy] warning: failed to parse tool result: {e}"
+                            );
                         }
                     }
                 }
@@ -405,7 +406,7 @@ fn extract_user_content(content: &Option<serde_json::Value>) -> Vec<CcContentIte
                                     if let Some(s) = u.as_str() {
                                         Some(s.to_string())
                                     } else {
-                    u.get("url").and_then(|u| u.as_str()).map(String::from)
+                                        u.get("url").and_then(|u| u.as_str()).map(String::from)
                                     }
                                 })
                                 .unwrap_or_default();
@@ -470,10 +471,7 @@ fn extract_assistant_content(
                 Some("tool_call") | Some("tool-call") => {
                     let name = obj
                         .get("name")
-                        .or_else(|| {
-                            obj.get("function")
-                                .and_then(|f| f.get("name"))
-                        })
+                        .or_else(|| obj.get("function").and_then(|f| f.get("name")))
                         .and_then(|n| n.as_str())
                         .unwrap_or("")
                         .to_string();
@@ -760,7 +758,10 @@ mod tests {
             FinishReason::ToolCalls
         );
         assert_eq!(FinishReason::from_upstream("length"), FinishReason::Length);
-        assert_eq!(FinishReason::from_upstream("max_tokens"), FinishReason::Length);
+        assert_eq!(
+            FinishReason::from_upstream("max_tokens"),
+            FinishReason::Length
+        );
         assert_eq!(FinishReason::from_upstream("unknown"), FinishReason::Stop);
     }
 
@@ -812,7 +813,11 @@ mod tests {
         assert_eq!(resp.usage.completion_tokens, 5);
         assert_eq!(resp.usage.total_tokens, 15);
         assert_eq!(
-            resp.usage.prompt_tokens_details.as_ref().unwrap().cached_tokens,
+            resp.usage
+                .prompt_tokens_details
+                .as_ref()
+                .unwrap()
+                .cached_tokens,
             2
         );
     }
@@ -835,15 +840,13 @@ mod tests {
         }];
 
         let wire = wire_messages(&messages);
-        let found = wire
-            .iter()
-            .find_map(|m| match m {
-                CcMessage::Assistant { content } => content.iter().find_map(|c| match c {
-                    CcContentItem::ToolCall { input, .. } => Some(input),
-                    _ => None,
-                }),
+        let found = wire.iter().find_map(|m| match m {
+            CcMessage::Assistant { content } => content.iter().find_map(|c| match c {
+                CcContentItem::ToolCall { input, .. } => Some(input),
                 _ => None,
-            });
+            }),
+            _ => None,
+        });
         assert!(found.is_some(), "expected a tool-call content item");
         let input = found.unwrap();
         assert!(
@@ -870,15 +873,13 @@ mod tests {
         }];
 
         let wire = wire_messages(&messages);
-        let found = wire
-            .iter()
-            .find_map(|m| match m {
-                CcMessage::Assistant { content } => content.iter().find_map(|c| match c {
-                    CcContentItem::ToolCall { input, .. } => Some(input),
-                    _ => None,
-                }),
+        let found = wire.iter().find_map(|m| match m {
+            CcMessage::Assistant { content } => content.iter().find_map(|c| match c {
+                CcContentItem::ToolCall { input, .. } => Some(input),
                 _ => None,
-            });
+            }),
+            _ => None,
+        });
         assert!(found.is_some(), "expected a tool-call content item");
         assert!(
             found.unwrap().is_string(),

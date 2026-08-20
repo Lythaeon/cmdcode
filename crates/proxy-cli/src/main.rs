@@ -16,11 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .with_thread_ids(true);
 
     if let Some(ref log_file) = config.log_file {
-        let writer = RotatingLog::new(
-            log_file.clone(),
-            config.log_max_bytes,
-            config.log_keep,
-        )?;
+        let writer = RotatingLog::new(log_file.clone(), config.log_max_bytes, config.log_keep)?;
         fmt.with_writer(writer).init();
     } else {
         fmt.init();

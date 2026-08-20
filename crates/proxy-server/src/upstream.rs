@@ -45,7 +45,13 @@ impl UpstreamClient {
             Some(Semaphore::new(config.max_concurrent))
         };
 
-        Self { http, config, auth, metrics, semaphore }
+        Self {
+            http,
+            config,
+            auth,
+            metrics,
+            semaphore,
+        }
     }
 
     pub async fn forward_request(
@@ -66,7 +72,8 @@ impl UpstreamClient {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| ".".to_string());
 
-        let mut headers = self.auth
+        let mut headers = self
+            .auth
             .build_headers(&cwd)
             .await
             .map_err(|e| UpstreamError::Io(std::io::Error::other(e.to_string())))?;
@@ -103,7 +110,10 @@ impl UpstreamClient {
             params_obj.insert("presence_penalty".into(), serde_json::json!(pp));
         }
         if let Some(stop) = &body.stop {
-            params_obj.insert("stop".into(), serde_json::to_value(stop).unwrap_or_default());
+            params_obj.insert(
+                "stop".into(),
+                serde_json::to_value(stop).unwrap_or_default(),
+            );
         }
         if let Some(user) = &body.user {
             params_obj.insert("user".into(), serde_json::json!(user));
@@ -141,18 +151,25 @@ impl UpstreamClient {
                         if body_text.starts_with('{') {
                             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body_text) {
                                 if let Some(err) = val.get("error") {
-                                    let upstream_err = UpstreamError::HttpError { status, body: err.to_string() };
+                                    let upstream_err = UpstreamError::HttpError {
+                                        status,
+                                        body: err.to_string(),
+                                    };
                                     if is_auth_rejected(status) && !auth_retried {
                                         self.auth.invalidate_cache().await;
-                                        headers = self.auth.build_headers(&cwd).await.map_err(|e| {
-                                            UpstreamError::Io(std::io::Error::other(e.to_string()))
-                                        })?;
+                                        headers =
+                                            self.auth.build_headers(&cwd).await.map_err(|e| {
+                                                UpstreamError::Io(std::io::Error::other(
+                                                    e.to_string(),
+                                                ))
+                                            })?;
                                         auth_retried = true;
                                         continue; // refresh once, not against the retry budget
                                     }
                                     if is_retryable(status) && attempt + 1 < max_attempts {
                                         last_err = Some(upstream_err);
-                                        let backoff = Duration::from_millis(100 * 2u64.pow(attempt));
+                                        let backoff =
+                                            Duration::from_millis(100 * 2u64.pow(attempt));
                                         tokio::time::sleep(backoff).await;
                                         self.metrics.inc_retries();
                                         attempt += 1;
@@ -162,13 +179,15 @@ impl UpstreamClient {
                                 }
                             }
                         }
-                        let upstream_err = UpstreamError::HttpError { status, body: body_text };
+                        let upstream_err = UpstreamError::HttpError {
+                            status,
+                            body: body_text,
+                        };
                         if is_auth_rejected(status) && !auth_retried {
                             self.auth.invalidate_cache().await;
-                            headers =
-                                self.auth.build_headers(&cwd).await.map_err(|e| {
-                                    UpstreamError::Io(std::io::Error::other(e.to_string()))
-                                })?;
+                            headers = self.auth.build_headers(&cwd).await.map_err(|e| {
+                                UpstreamError::Io(std::io::Error::other(e.to_string()))
+                            })?;
                             auth_retried = true;
                             continue; // refresh once, not against the retry budget
                         }
@@ -184,7 +203,10 @@ impl UpstreamClient {
                     }
 
                     if !body.stream.unwrap_or(false) {
-                        let text = response.text().await.map_err(|e| UpstreamError::Io(std::io::Error::other(e.to_string())))?;
+                        let text = response
+                            .text()
+                            .await
+                            .map_err(|e| UpstreamError::Io(std::io::Error::other(e.to_string())))?;
                         let mut text_parts = Vec::new();
                         let mut reasoning_parts = Vec::new();
                         let mut tool_calls = Vec::new();
@@ -193,11 +215,21 @@ impl UpstreamClient {
 
                         for line in text.lines() {
                             let line = line.trim();
-                            if line.is_empty() { continue; }
+                            if line.is_empty() {
+                                continue;
+                            }
                             if let Ok(evt) = serde_json::from_str::<UpstreamEvent>(line) {
                                 match evt.event_type.as_str() {
-                                    "text-delta" => { if let Some(t) = evt.text { text_parts.push(t); } }
-                                    "reasoning-delta" => { if let Some(t) = evt.text { reasoning_parts.push(t); } }
+                                    "text-delta" => {
+                                        if let Some(t) = evt.text {
+                                            text_parts.push(t);
+                                        }
+                                    }
+                                    "reasoning-delta" => {
+                                        if let Some(t) = evt.text {
+                                            reasoning_parts.push(t);
+                                        }
+                                    }
                                     "tool-call" => {
                                         tool_calls.push((
                                             evt.tool_call_id.unwrap_or_default(),
@@ -210,10 +242,13 @@ impl UpstreamClient {
                                             usage.input_tokens = u.input_tokens.unwrap_or(0);
                                             usage.output_tokens = u.output_tokens.unwrap_or(0);
                                             if let Some(d) = u.input_token_details {
-                                                usage.cache_read_tokens = d.cache_read_tokens.unwrap_or(0);
+                                                usage.cache_read_tokens =
+                                                    d.cache_read_tokens.unwrap_or(0);
                                             }
                                         }
-                                        let raw = evt.raw_finish_reason.as_deref()
+                                        let raw = evt
+                                            .raw_finish_reason
+                                            .as_deref()
                                             .or(evt.finish_reason.as_deref())
                                             .unwrap_or("stop");
                                         finish_reason = FinishReason::from_upstream(raw);
@@ -221,7 +256,10 @@ impl UpstreamClient {
                                     "error" => {
                                         return Err(UpstreamError::HttpError {
                                             status: 502,
-                                            body: evt.error.and_then(|e| e.message).unwrap_or_else(|| "stream error".into()),
+                                            body: evt
+                                                .error
+                                                .and_then(|e| e.message)
+                                                .unwrap_or_else(|| "stream error".into()),
                                         });
                                     }
                                     _ => {}
@@ -229,9 +267,17 @@ impl UpstreamClient {
                             }
                         }
 
-                        return Ok(UpstreamResponse::Json(serde_json::to_value(
-                            build_completion(model.as_str(), &text_parts.join(""), &reasoning_parts.join(""), &tool_calls, finish_reason, &usage)
-                        ).unwrap()));
+                        return Ok(UpstreamResponse::Json(
+                            serde_json::to_value(build_completion(
+                                model.as_str(),
+                                &text_parts.join(""),
+                                &reasoning_parts.join(""),
+                                &tool_calls,
+                                finish_reason,
+                                &usage,
+                            ))
+                            .unwrap(),
+                        ));
                     } else {
                         let (tx, rx) = mpsc::channel(256);
                         let stream = response.bytes_stream();
@@ -318,7 +364,8 @@ impl UpstreamClient {
                                     }
                                     LineOutcome::Emit(payload) => {
                                         if tx.send(Ok(payload)).await.is_ok() {
-                                            let _ = tx.send(Ok("data: [DONE]\n\n".to_string())).await;
+                                            let _ =
+                                                tx.send(Ok("data: [DONE]\n\n".to_string())).await;
                                         }
                                     }
                                     LineOutcome::EmitAndStop(payload) => {
@@ -339,9 +386,14 @@ impl UpstreamClient {
                 }
                 Err(e) => {
                     let upstream_err = if e.is_connect() {
-                        UpstreamError::ConnectionRefused { host: "upstream".into(), port: 443 }
+                        UpstreamError::ConnectionRefused {
+                            host: "upstream".into(),
+                            port: 443,
+                        }
                     } else if e.is_timeout() {
-                        UpstreamError::Timeout { timeout_secs: self.config.upstream_timeout_secs }
+                        UpstreamError::Timeout {
+                            timeout_secs: self.config.upstream_timeout_secs,
+                        }
                     } else {
                         UpstreamError::Io(std::io::Error::other(e.to_string()))
                     };
@@ -361,7 +413,8 @@ impl UpstreamClient {
             }
         }
 
-        Err(last_err.unwrap_or_else(|| UpstreamError::Io(std::io::Error::other("max retries exceeded"))))
+        Err(last_err
+            .unwrap_or_else(|| UpstreamError::Io(std::io::Error::other("max retries exceeded"))))
     }
 }
 
@@ -512,7 +565,9 @@ pub fn translate_line(line: &str, state: &mut StreamState) -> LineOutcome {
             })
         }
         "finish" => {
-            let raw = evt.raw_finish_reason.as_deref()
+            let raw = evt
+                .raw_finish_reason
+                .as_deref()
                 .or(evt.finish_reason.as_deref())
                 .unwrap_or("stop");
             let fr = match raw {
@@ -554,14 +609,17 @@ pub fn translate_line(line: &str, state: &mut StreamState) -> LineOutcome {
             chunk
         }
         "error" => {
-            let msg = evt.error.and_then(|e| e.message)
+            let msg = evt
+                .error
+                .and_then(|e| e.message)
                 .unwrap_or_else(|| "stream error".into());
             let chunk = serde_json::json!({
                 "error": {"message": msg, "type": "upstream_error"}
             });
-            return LineOutcome::EmitAndStop(
-                format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap_or_default()),
-            );
+            return LineOutcome::EmitAndStop(format!(
+                "data: {}\n\n",
+                serde_json::to_string(&chunk).unwrap_or_default()
+            ));
         }
         _ => {
             state.skipped += 1;
@@ -569,7 +627,10 @@ pub fn translate_line(line: &str, state: &mut StreamState) -> LineOutcome {
         }
     };
 
-    LineOutcome::Emit(format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap_or_default()))
+    LineOutcome::Emit(format!(
+        "data: {}\n\n",
+        serde_json::to_string(&chunk).unwrap_or_default()
+    ))
 }
 
 /// Days since 1970-01-01 to civil (year, month, day) — Howard Hinnant's algorithm.
@@ -598,7 +659,8 @@ fn extract_system(messages: &[proxy_core::wire_format::OpenAiMessage]) -> Option
         if msg.role == "system" {
             return Some(match &msg.content {
                 Some(serde_json::Value::String(s)) => s.clone(),
-                Some(serde_json::Value::Array(arr)) => arr.iter()
+                Some(serde_json::Value::Array(arr)) => arr
+                    .iter()
                     .filter_map(|p| {
                         if let Some(obj) = p.as_object() {
                             if obj.get("type").and_then(|t| t.as_str()) == Some("text") {
@@ -606,7 +668,9 @@ fn extract_system(messages: &[proxy_core::wire_format::OpenAiMessage]) -> Option
                             }
                         }
                         p.as_str().map(String::from)
-                    }).collect::<Vec<_>>().join(" "),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" "),
                 _ => String::new(),
             });
         }
@@ -655,7 +719,8 @@ mod tests {
         ] {
             match translate_line(line, &mut s) {
                 LineOutcome::Emit(p) | LineOutcome::EmitAndStop(p) => {
-                    let val: serde_json::Value = serde_json::from_str(p.trim_start_matches("data: ").trim()).unwrap();
+                    let val: serde_json::Value =
+                        serde_json::from_str(p.trim_start_matches("data: ").trim()).unwrap();
                     ids.push(val["id"].as_str().unwrap().to_string());
                 }
                 LineOutcome::Skip => panic!("unexpected skip: {line}"),
@@ -670,9 +735,13 @@ mod tests {
         let line = r#"{"type":"tool-call","toolCallId":"tc1","toolName":"get_weather","input":"{\"city\":\"Berlin\"}"}"#;
         match translate_line(line, &mut s) {
             LineOutcome::Emit(p) => {
-                let val: serde_json::Value = serde_json::from_str(p.trim_start_matches("data: ").trim()).unwrap();
+                let val: serde_json::Value =
+                    serde_json::from_str(p.trim_start_matches("data: ").trim()).unwrap();
                 let args = &val["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"];
-                assert!(args.is_string(), "arguments must be a JSON string on the wire: {args}");
+                assert!(
+                    args.is_string(),
+                    "arguments must be a JSON string on the wire: {args}"
+                );
                 assert_eq!(args, r#"{"city":"Berlin"}"#);
             }
             _ => panic!("expected Emit"),
@@ -685,10 +754,15 @@ mod tests {
         let line = r#"{"type":"tool-call","toolCallId":"tc1","toolName":"todowrite","input":{"todos":[{"content":"x","priority":"high","status":"in_progress"}]}}"#;
         match translate_line(line, &mut s) {
             LineOutcome::Emit(p) => {
-                let val: serde_json::Value = serde_json::from_str(p.trim_start_matches("data: ").trim()).unwrap();
+                let val: serde_json::Value =
+                    serde_json::from_str(p.trim_start_matches("data: ").trim()).unwrap();
                 let args = &val["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"];
-                assert!(args.is_string(), "object args must be serialized to a JSON string: {args}");
-                let reparsed: serde_json::Value = serde_json::from_str(args.as_str().unwrap()).unwrap();
+                assert!(
+                    args.is_string(),
+                    "object args must be serialized to a JSON string: {args}"
+                );
+                let reparsed: serde_json::Value =
+                    serde_json::from_str(args.as_str().unwrap()).unwrap();
                 assert_eq!(reparsed["todos"][0]["priority"], "high");
             }
             _ => panic!("expected Emit"),
@@ -698,10 +772,12 @@ mod tests {
     #[test]
     fn test_translate_tool_call_unparseable_args_stays_string() {
         let mut s = state("chatcmpl-1", "m1");
-        let line = r#"{"type":"tool-call","toolCallId":"tc1","toolName":"t","input":"not json at all"}"#;
+        let line =
+            r#"{"type":"tool-call","toolCallId":"tc1","toolName":"t","input":"not json at all"}"#;
         match translate_line(line, &mut s) {
             LineOutcome::Emit(p) => {
-                let val: serde_json::Value = serde_json::from_str(p.trim_start_matches("data: ").trim()).unwrap();
+                let val: serde_json::Value =
+                    serde_json::from_str(p.trim_start_matches("data: ").trim()).unwrap();
                 let args = &val["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"];
                 assert_eq!(args, "not json at all");
             }
@@ -719,8 +795,13 @@ mod tests {
         ] {
             match translate_line(line, &mut s) {
                 LineOutcome::Emit(p) => {
-                    let val: serde_json::Value = serde_json::from_str(p.trim_start_matches("data: ").trim()).unwrap();
-                    idxs.push(val["choices"][0]["delta"]["tool_calls"][0]["index"].as_u64().unwrap());
+                    let val: serde_json::Value =
+                        serde_json::from_str(p.trim_start_matches("data: ").trim()).unwrap();
+                    idxs.push(
+                        val["choices"][0]["delta"]["tool_calls"][0]["index"]
+                            .as_u64()
+                            .unwrap(),
+                    );
                 }
                 _ => panic!("expected Emit"),
             }
@@ -740,11 +821,17 @@ mod tests {
             ("weird", "stop"),
         ] {
             let mut s = state("chatcmpl-1", "m1");
-            let line = format!(r#"{{"type":"finish","finishReason":"{raw}","totalUsage":{{"inputTokens":2,"outputTokens":3}}}}"#);
+            let line = format!(
+                r#"{{"type":"finish","finishReason":"{raw}","totalUsage":{{"inputTokens":2,"outputTokens":3}}}}"#
+            );
             match translate_line(&line, &mut s) {
                 LineOutcome::Emit(p) => {
-                    let val: serde_json::Value = serde_json::from_str(p.trim_start_matches("data: ").trim()).unwrap();
-                    assert_eq!(val["choices"][0]["finish_reason"], expected, "for raw={raw}");
+                    let val: serde_json::Value =
+                        serde_json::from_str(p.trim_start_matches("data: ").trim()).unwrap();
+                    assert_eq!(
+                        val["choices"][0]["finish_reason"], expected,
+                        "for raw={raw}"
+                    );
                     assert_eq!(val["usage"]["total_tokens"], 5);
                 }
                 _ => panic!("expected Emit for {raw}"),
@@ -758,7 +845,8 @@ mod tests {
         let line = r#"{"type":"finish","finishReason":"stop","totalUsage":{"inputTokens":10,"outputTokens":4,"inputTokenDetails":{"cacheReadTokens":7}}}"#;
         match translate_line(line, &mut s) {
             LineOutcome::Emit(p) => {
-                let val: serde_json::Value = serde_json::from_str(p.trim_start_matches("data: ").trim()).unwrap();
+                let val: serde_json::Value =
+                    serde_json::from_str(p.trim_start_matches("data: ").trim()).unwrap();
                 assert_eq!(val["usage"]["prompt_tokens"], 10);
                 assert_eq!(val["usage"]["completion_tokens"], 4);
                 assert_eq!(val["usage"]["total_tokens"], 14);
@@ -784,7 +872,15 @@ mod tests {
     #[test]
     fn test_translate_skips_garbage() {
         let mut s = state("chatcmpl-1", "m1");
-        for line in ["", "   ", "not json", "{\"type\":\"unknown\"}", "{broken", "null", "42"] {
+        for line in [
+            "",
+            "   ",
+            "not json",
+            "{\"type\":\"unknown\"}",
+            "{broken",
+            "null",
+            "42",
+        ] {
             match translate_line(line, &mut s) {
                 LineOutcome::Skip => {}
                 _ => panic!("expected Skip for {line:?}"),
@@ -823,14 +919,29 @@ mod tests {
             .unwrap_or(300);
 
         let fragments = [
-            "", " ", "\n", "\u{0}", "{\"type\":", "\"text-delta\"", "\"tool-call\"",
-            "\"finish\"", "\"error\"", "\"reasoning-delta\"", "\"toolCallId\":\"tc\"",
-            "\"toolName\":\"t\"", "\"input\":", "\"text\":\"hi\"", "null", "42",
-            "[1,2,3]", "\"totalUsage\":{\"inputTokens\":1,\"outputTokens\":2}",
+            "",
+            " ",
+            "\n",
+            "\u{0}",
+            "{\"type\":",
+            "\"text-delta\"",
+            "\"tool-call\"",
+            "\"finish\"",
+            "\"error\"",
+            "\"reasoning-delta\"",
+            "\"toolCallId\":\"tc\"",
+            "\"toolName\":\"t\"",
+            "\"input\":",
+            "\"text\":\"hi\"",
+            "null",
+            "42",
+            "[1,2,3]",
+            "\"totalUsage\":{\"inputTokens\":1,\"outputTokens\":2}",
             "{\"type\":\"finish\",\"finishReason\":\"stop\"}",
             "{\"type\":\"tool-call\",\"input\":{\"a\":[1,{\"b\":null}]}}",
             "{\"type\":\"tool-call\",\"input\":\"{\\\"a\\\":1}\"}",
-            "\"reasoning_effort\":\"high\"", "}",
+            "\"reasoning_effort\":\"high\"",
+            "}",
         ];
 
         let mut rng = rand::thread_rng();
@@ -857,17 +968,28 @@ mod tests {
                 LineOutcome::Skip => {}
                 LineOutcome::Emit(p) | LineOutcome::EmitAndStop(p) => {
                     emitted += 1;
-                    assert!(p.starts_with("data: "), "SSE payload must start with data: {p}");
+                    assert!(
+                        p.starts_with("data: "),
+                        "SSE payload must start with data: {p}"
+                    );
                     let json = p.trim_start_matches("data: ").trim();
-                    assert!(serde_json::from_str::<serde_json::Value>(json).is_ok(),
-                        "emitted payload must be valid JSON: {p}");
+                    assert!(
+                        serde_json::from_str::<serde_json::Value>(json).is_ok(),
+                        "emitted payload must be valid JSON: {p}"
+                    );
                     parsed_ok += 1;
                     let v: serde_json::Value = serde_json::from_str(json).unwrap();
                     if let Some(choices) = v.get("choices") {
                         if let Some(chunk) = choices.as_array().and_then(|a| a.first()) {
-                            if let Some(tc) = chunk["delta"]["tool_calls"].as_array().and_then(|a| a.first()) {
+                            if let Some(tc) = chunk["delta"]["tool_calls"]
+                                .as_array()
+                                .and_then(|a| a.first())
+                            {
                                 let args = &tc["function"]["arguments"];
-                                assert!(args.is_string(), "tool-call arguments must be a string: {args}");
+                                assert!(
+                                    args.is_string(),
+                                    "tool-call arguments must be a string: {args}"
+                                );
                             }
                         }
                     }
@@ -914,7 +1036,10 @@ mod tests {
         ));
         let metrics = Arc::new(Metrics::new());
         let client = UpstreamClient::new(config, auth, metrics);
-        assert!(client.semaphore.is_none(), "0 concurrent must mean unlimited (None)");
+        assert!(
+            client.semaphore.is_none(),
+            "0 concurrent must mean unlimited (None)"
+        );
     }
 
     #[test]
@@ -926,8 +1051,15 @@ mod tests {
         ));
         let metrics = Arc::new(Metrics::new());
         let client = UpstreamClient::new(config, auth, metrics);
-        let sem = client.semaphore.as_ref().expect("5 must create a semaphore");
-        assert_eq!(sem.available_permits(), 5, "5 concurrent must allow exactly 5 permits");
+        let sem = client
+            .semaphore
+            .as_ref()
+            .expect("5 must create a semaphore");
+        assert_eq!(
+            sem.available_permits(),
+            5,
+            "5 concurrent must allow exactly 5 permits"
+        );
     }
 
     #[tokio::test]

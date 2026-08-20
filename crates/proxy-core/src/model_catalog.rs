@@ -181,7 +181,9 @@ mod tests {
         let catalog = parse_models_md(SAMPLE_MD);
         assert_eq!(catalog.len(), 5);
 
-        let ds = catalog.get(&ModelId::new("deepseek/deepseek-v4-pro")).unwrap();
+        let ds = catalog
+            .get(&ModelId::new("deepseek/deepseek-v4-pro"))
+            .unwrap();
         assert_eq!(ds.name, "DeepSeek V4 Pro");
         assert_eq!(ds.context_window, ContextWindow::new(1_000_000));
         assert_eq!(ds.efforts, vec![Effort::High, Effort::Max]);
@@ -218,6 +220,9 @@ mod tests {
             PathBuf::from("/usr/local/lib/node_modules/command-code/dist/bundled/command-code-knowledge/reference/models.md"),
         ];
         let found = candidates.iter().any(|p| p.exists());
-        assert!(found, "none of the bundled models.md candidates exist on this machine");
+        assert!(
+            found,
+            "none of the bundled models.md candidates exist on this machine"
+        );
     }
 }

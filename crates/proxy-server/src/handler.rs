@@ -53,16 +53,28 @@ impl ProxyHttp for CommandCodeProxy {
     ) -> PingoraResult<Box<HttpPeer>> {
         let upstream_url = &self.upstream_client.config.upstream_url;
         let host = upstream_url
-            .split("://").nth(1)
+            .split("://")
+            .nth(1)
             .and_then(|s| s.split(':').next())
             .unwrap_or("api.commandcode.ai")
             .to_string();
         let tls = upstream_url.starts_with("https");
 
-        let peer = HttpPeer::new((host.clone(), self.upstream_client.config.upstream_url
-            .split(':').nth(2).and_then(|s| s.split('/').next())
-            .and_then(|s| s.parse::<u16>().ok())
-            .unwrap_or(if tls { 443 } else { 80 })), tls, host);
+        let peer = HttpPeer::new(
+            (
+                host.clone(),
+                self.upstream_client
+                    .config
+                    .upstream_url
+                    .split(':')
+                    .nth(2)
+                    .and_then(|s| s.split('/').next())
+                    .and_then(|s| s.parse::<u16>().ok())
+                    .unwrap_or(if tls { 443 } else { 80 }),
+            ),
+            tls,
+            host,
+        );
         Ok(Box::new(peer))
     }
 
@@ -91,7 +103,10 @@ impl ProxyHttp for CommandCodeProxy {
             if let Some(ref origin) = self.config.cors_origin {
                 resp.insert_header("access-control-allow-origin", origin.as_str())?;
                 resp.insert_header("access-control-allow-methods", "GET, POST, OPTIONS")?;
-                resp.insert_header("access-control-allow-headers", "Content-Type, Authorization")?;
+                resp.insert_header(
+                    "access-control-allow-headers",
+                    "Content-Type, Authorization",
+                )?;
             }
             session.write_response_header(Box::new(resp), true).await?;
             return Ok(true);
@@ -184,10 +199,7 @@ impl ProxyHttp for CommandCodeProxy {
         };
 
         // Validate model
-        let model_id_str = body
-            .model
-            .as_deref()
-            .unwrap_or(&self.config.default_model);
+        let model_id_str = body.model.as_deref().unwrap_or(&self.config.default_model);
         let (model, effort) = proxy_core::types::parse_model_and_effort(model_id_str);
         let model = model.strip_prefix();
 
@@ -219,7 +231,10 @@ impl ProxyHttp for CommandCodeProxy {
 
         // Forward to upstream
         let start = Instant::now();
-        let result = self.upstream_client.forward_request(&model, &body, effort).await;
+        let result = self
+            .upstream_client
+            .forward_request(&model, &body, effort)
+            .await;
 
         match result {
             Ok(upstream::UpstreamResponse::Json(completion)) => {
@@ -246,7 +261,8 @@ impl ProxyHttp for CommandCodeProxy {
                 resp.insert_header("connection", "keep-alive")?;
                 session.write_response_header(Box::new(resp), false).await?;
 
-                let idle_timeout = std::time::Duration::from_secs(self.config.stream_idle_timeout_secs);
+                let idle_timeout =
+                    std::time::Duration::from_secs(self.config.stream_idle_timeout_secs);
                 let mut chunks = 0u32;
                 let mut bytes_out = 0usize;
                 let mut client_gone = false;
@@ -255,7 +271,10 @@ impl ProxyHttp for CommandCodeProxy {
                     let recv = tokio::time::timeout(idle_timeout, rx.recv()).await;
                     match recv {
                         Ok(Some(Ok(line))) => {
-                            if let Err(e) = session.write_response_body(Some(Bytes::from(line.clone())), false).await {
+                            if let Err(e) = session
+                                .write_response_body(Some(Bytes::from(line.clone())), false)
+                                .await
+                            {
                                 if is_client_disconnect(&e) {
                                     tracing::warn!(request_id = %ctx.request_id.as_str(), "client disconnected; aborting stream");
                                     self.metrics.inc_client_disconnect();
@@ -314,10 +333,7 @@ impl ProxyHttp for CommandCodeProxy {
             }
             Err(e) => {
                 self.metrics.inc_error();
-                if matches!(
-                    e,
-                    proxy_core::error::UpstreamError::Timeout { .. }
-                ) {
+                if matches!(e, proxy_core::error::UpstreamError::Timeout { .. }) {
                     self.metrics.inc_upstream_timeout();
                 }
                 tracing::error!(error = %e, "upstream error");
@@ -413,14 +429,19 @@ impl CommandCodeProxy {
         if let Some(ref origin) = self.config.cors_origin {
             resp.insert_header("access-control-allow-origin", origin.as_str())?;
             resp.insert_header("access-control-allow-methods", "GET, POST, OPTIONS")?;
-            resp.insert_header("access-control-allow-headers", "Content-Type, Authorization")?;
+            resp.insert_header(
+                "access-control-allow-headers",
+                "Content-Type, Authorization",
+            )?;
         }
         session.write_response_header(Box::new(resp), false).await?;
 
         // Serialize directly to bytes — avoid intermediate Value serialization
         let bytes = serde_json::to_vec(body)
             .map_err(|e| Error::because(ErrorType::InternalError, "json serialize", e))?;
-        session.write_response_body(Some(Bytes::from(bytes)), true).await?;
+        session
+            .write_response_body(Some(Bytes::from(bytes)), true)
+            .await?;
         Ok(())
     }
 

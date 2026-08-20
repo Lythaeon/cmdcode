@@ -5,7 +5,8 @@ use tokio::net::TcpListener;
 
 type MockBody = http_body_util::combinators::BoxBody<bytes::Bytes, std::io::Error>;
 type MockServiceResult = hyper::Result<hyper::Response<MockBody>>;
-type MockServiceFuture = std::pin::Pin<Box<dyn std::future::Future<Output = MockServiceResult> + Send>>;
+type MockServiceFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = MockServiceResult> + Send>>;
 
 /// Mock upstream that returns configurable NDJSON responses.
 struct MockUpstream {
@@ -102,88 +103,103 @@ impl MockUpstream {
                         return;
                     }
                     let io = hyper_util::rt::TokioIo::new(stream);
-                let service = hyper::service::service_fn(
-                    move |req: hyper::Request<hyper::body::Incoming>| -> MockServiceFuture {
-                    let events = events.clone();
-                    let status_sequence = status_sequence.clone();
-                    let counter = counter.clone();
-                    let final_tail = final_tail.clone();
-                    Box::pin(async move {
-                        // Consume request body
-                        use http_body_util::BodyExt;
-                        let _ = req.into_body().collect().await;
+                    let service = hyper::service::service_fn(
+                        move |req: hyper::Request<hyper::body::Incoming>| -> MockServiceFuture {
+                            let events = events.clone();
+                            let status_sequence = status_sequence.clone();
+                            let counter = counter.clone();
+                            let final_tail = final_tail.clone();
+                            Box::pin(async move {
+                                // Consume request body
+                                use http_body_util::BodyExt;
+                                let _ = req.into_body().collect().await;
 
-                            if delay > 0 {
-                                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                            }
-
-                            let req_status = match &status_sequence {
-                                Some(seq) => {
-                                    let idx = counter.fetch_add(1, Ordering::SeqCst);
-                                    seq[idx.min(seq.len() - 1)]
+                                if delay > 0 {
+                                    tokio::time::sleep(std::time::Duration::from_millis(delay))
+                                        .await;
                                 }
-                                None => status,
-                            };
 
-                            if req_status != 200 {
-                                let body = r#"{"error":{"message":"upstream error"}}"#;
-                                let stream = futures::stream::once(async move {
-                                    Ok::<_, std::io::Error>(hyper::body::Frame::data(
-                                        bytes::Bytes::from(body),
-                                    ))
-                                });
-                                let mut resp = hyper::Response::new(
-                                    http_body_util::StreamBody::new(stream).boxed(),
-                                );
-                                *resp.status_mut() = hyper::StatusCode::from_u16(req_status).unwrap();
-                                resp.headers_mut().insert("content-type", "application/json".parse().unwrap());
-                                resp.headers_mut().insert("connection", "close".parse().unwrap());
-                                return Ok(resp);
-                            }
+                                let req_status = match &status_sequence {
+                                    Some(seq) => {
+                                        let idx = counter.fetch_add(1, Ordering::SeqCst);
+                                        seq[idx.min(seq.len() - 1)]
+                                    }
+                                    None => status,
+                                };
 
-                            if events.is_empty() {
-                                let stream = futures::stream::once(async move {
-                                    Ok::<_, std::io::Error>(hyper::body::Frame::data(
-                                        bytes::Bytes::new(),
-                                    ))
-                                });
-                                return Ok(hyper::Response::new(
-                                    http_body_util::StreamBody::new(stream).boxed(),
-                                ));
-                            }
-
-                            let frame_stream = futures::stream::unfold(
-                                (events.clone(), 0usize, final_tail.clone()),
-                                move |(evts, i, final_tail)| async move {
-                                    if i >= evts.len() {
-                                        return None;
-                                    }
-                                    if chunk_gap > 0 && i > 0 {
-                                        tokio::time::sleep(std::time::Duration::from_millis(chunk_gap)).await;
-                                    }
-                                    let mut line = serde_json::to_string(&evts[i]).unwrap();
-                                    if final_tail.is_some() && i + 1 == evts.len() {
-                                        line.push_str(final_tail.as_deref().unwrap_or_default());
-                                    }
-                                    if !(no_final_newline && i + 1 == evts.len()) {
-                                        line.push('\n');
-                                    }
-                                    Some((
+                                if req_status != 200 {
+                                    let body = r#"{"error":{"message":"upstream error"}}"#;
+                                    let stream = futures::stream::once(async move {
                                         Ok::<_, std::io::Error>(hyper::body::Frame::data(
-                                            bytes::Bytes::from(line),
-                                        )),
-                                        (evts, i + 1, final_tail),
-                                    ))
-                                },
-                            );
+                                            bytes::Bytes::from(body),
+                                        ))
+                                    });
+                                    let mut resp = hyper::Response::new(
+                                        http_body_util::StreamBody::new(stream).boxed(),
+                                    );
+                                    *resp.status_mut() =
+                                        hyper::StatusCode::from_u16(req_status).unwrap();
+                                    resp.headers_mut().insert(
+                                        "content-type",
+                                        "application/json".parse().unwrap(),
+                                    );
+                                    resp.headers_mut()
+                                        .insert("connection", "close".parse().unwrap());
+                                    return Ok(resp);
+                                }
 
-                            let mut resp = hyper::Response::new(
-                                http_body_util::StreamBody::new(frame_stream).boxed(),
-                            );
-                            resp.headers_mut().insert("content-type", "application/x-ndjson".parse().unwrap());
-                            Ok(resp)
-                        })
-                    });
+                                if events.is_empty() {
+                                    let stream = futures::stream::once(async move {
+                                        Ok::<_, std::io::Error>(hyper::body::Frame::data(
+                                            bytes::Bytes::new(),
+                                        ))
+                                    });
+                                    return Ok(hyper::Response::new(
+                                        http_body_util::StreamBody::new(stream).boxed(),
+                                    ));
+                                }
+
+                                let frame_stream = futures::stream::unfold(
+                                    (events.clone(), 0usize, final_tail.clone()),
+                                    move |(evts, i, final_tail)| async move {
+                                        if i >= evts.len() {
+                                            return None;
+                                        }
+                                        if chunk_gap > 0 && i > 0 {
+                                            tokio::time::sleep(std::time::Duration::from_millis(
+                                                chunk_gap,
+                                            ))
+                                            .await;
+                                        }
+                                        let mut line = serde_json::to_string(&evts[i]).unwrap();
+                                        if final_tail.is_some() && i + 1 == evts.len() {
+                                            line.push_str(
+                                                final_tail.as_deref().unwrap_or_default(),
+                                            );
+                                        }
+                                        if !(no_final_newline && i + 1 == evts.len()) {
+                                            line.push('\n');
+                                        }
+                                        Some((
+                                            Ok::<_, std::io::Error>(hyper::body::Frame::data(
+                                                bytes::Bytes::from(line),
+                                            )),
+                                            (evts, i + 1, final_tail),
+                                        ))
+                                    },
+                                );
+
+                                let mut resp = hyper::Response::new(
+                                    http_body_util::StreamBody::new(frame_stream).boxed(),
+                                );
+                                resp.headers_mut().insert(
+                                    "content-type",
+                                    "application/x-ndjson".parse().unwrap(),
+                                );
+                                Ok(resp)
+                            })
+                        },
+                    );
 
                     hyper::server::conn::http1::Builder::new()
                         .serve_connection(io, service)
@@ -243,12 +259,11 @@ async fn test_e2e_models_endpoint() {
     std::fs::write(
         "/tmp/test/.commandcode/auth.json",
         r#"{"apiKey":"test-key"}"#,
-    ).ok();
+    )
+    .ok();
 
-    let auth = proxy_core::auth::AuthManager::new(
-        std::path::PathBuf::from("/tmp/test/.commandcode"),
-        30,
-    );
+    let auth =
+        proxy_core::auth::AuthManager::new(std::path::PathBuf::from("/tmp/test/.commandcode"), 30);
 
     // Catalog may be empty in test env if CLI isn't installed — that's OK
     let _catalog = proxy_core::model_catalog::get_model_catalog();
@@ -302,23 +317,21 @@ async fn test_e2e_wire_format_translation() {
 
 #[tokio::test]
 async fn test_e2e_tool_translation() {
-    let tools = vec![
-        proxy_core::wire_format::OpenAiTool {
-            tool_type: "function".into(),
-            function: Some(proxy_core::wire_format::OpenAiFunction {
-                name: "search".into(),
-                description: Some("Search the web".into()),
-                parameters: Some(serde_json::json!({
-                    "type": "object",
-                    "properties": {"query": {"type": "string"}}
-                })),
-            }),
-            name: None,
-            description: None,
-            input_schema: None,
-            parameters: None,
-        },
-    ];
+    let tools = vec![proxy_core::wire_format::OpenAiTool {
+        tool_type: "function".into(),
+        function: Some(proxy_core::wire_format::OpenAiFunction {
+            name: "search".into(),
+            description: Some("Search the web".into()),
+            parameters: Some(serde_json::json!({
+                "type": "object",
+                "properties": {"query": {"type": "string"}}
+            })),
+        }),
+        name: None,
+        description: None,
+        input_schema: None,
+        parameters: None,
+    }];
 
     let wire = proxy_core::wire_format::wire_tools(&tools);
     assert_eq!(wire.len(), 1);
@@ -336,7 +349,8 @@ async fn test_e2e_reasoning_effort_parsing() {
     assert_eq!(model.as_str(), "gpt-5.6-luna");
     assert_eq!(effort, None);
 
-    let (model, effort) = proxy_core::types::parse_model_and_effort("command-code/xiaomi/mimo-v2.5:max");
+    let (model, effort) =
+        proxy_core::types::parse_model_and_effort("command-code/xiaomi/mimo-v2.5:max");
     assert_eq!(model.as_str(), "xiaomi/mimo-v2.5");
     assert_eq!(effort, Some(proxy_core::types::Effort::Max));
 }
@@ -347,24 +361,44 @@ async fn test_e2e_reasoning_effort_parsing() {
 
 #[tokio::test]
 async fn test_chaos_empty_upstream() {
-    let addr = MockUpstream { events: vec![], status: 200, delay_ms: 0, ..MockUpstream::normal() }.start().await;
-    let (status, _) = proxy_request(addr, "/alpha/generate", "POST", Some(r#"{"test":true}"#)).await;
+    let addr = MockUpstream {
+        events: vec![],
+        status: 200,
+        delay_ms: 0,
+        ..MockUpstream::normal()
+    }
+    .start()
+    .await;
+    let (status, _) =
+        proxy_request(addr, "/alpha/generate", "POST", Some(r#"{"test":true}"#)).await;
     assert_eq!(status, 200);
 }
 
 #[tokio::test]
 async fn test_chaos_upstream_500() {
-    let addr = MockUpstream { status: 500, ..MockUpstream::normal() }.start().await;
-    let (status, body) = proxy_request(addr, "/alpha/generate", "POST", Some(r#"{"test":true}"#)).await;
+    let addr = MockUpstream {
+        status: 500,
+        ..MockUpstream::normal()
+    }
+    .start()
+    .await;
+    let (status, body) =
+        proxy_request(addr, "/alpha/generate", "POST", Some(r#"{"test":true}"#)).await;
     assert_eq!(status, 500);
     assert!(body.contains("upstream error"));
 }
 
 #[tokio::test]
 async fn test_chaos_upstream_slow() {
-    let addr = MockUpstream { delay_ms: 100, ..MockUpstream::normal() }.start().await;
+    let addr = MockUpstream {
+        delay_ms: 100,
+        ..MockUpstream::normal()
+    }
+    .start()
+    .await;
     let start = std::time::Instant::now();
-    let (status, _) = proxy_request(addr, "/alpha/generate", "POST", Some(r#"{"test":true}"#)).await;
+    let (status, _) =
+        proxy_request(addr, "/alpha/generate", "POST", Some(r#"{"test":true}"#)).await;
     let elapsed = start.elapsed();
     assert_eq!(status, 200);
     assert!(elapsed >= std::time::Duration::from_millis(80));
@@ -380,16 +414,20 @@ async fn test_chaos_malformed_json_upstream() {
             let (stream, _) = listener.accept().await.unwrap();
             tokio::spawn(async move {
                 let io = hyper_util::rt::TokioIo::new(stream);
-                let service = hyper::service::service_fn(|req: hyper::Request<hyper::body::Incoming>| async move {
-                    use http_body_util::BodyExt;
-                    let _ = req.into_body().collect().await;
-                    let body = "not json at all\n{\"type\":\"text-delta\",\"text\":\"recovered\"}\n";
-                    let mut resp = hyper::Response::new(http_body_util::Full::new(
-                        bytes::Bytes::from(body),
-                    ));
-                    resp.headers_mut().insert("content-type", "application/x-ndjson".parse().unwrap());
-                    Ok::<_, hyper::Error>(resp)
-                });
+                let service = hyper::service::service_fn(
+                    |req: hyper::Request<hyper::body::Incoming>| async move {
+                        use http_body_util::BodyExt;
+                        let _ = req.into_body().collect().await;
+                        let body =
+                            "not json at all\n{\"type\":\"text-delta\",\"text\":\"recovered\"}\n";
+                        let mut resp = hyper::Response::new(http_body_util::Full::new(
+                            bytes::Bytes::from(body),
+                        ));
+                        resp.headers_mut()
+                            .insert("content-type", "application/x-ndjson".parse().unwrap());
+                        Ok::<_, hyper::Error>(resp)
+                    },
+                );
                 hyper::server::conn::http1::Builder::new()
                     .serve_connection(io, service)
                     .await
@@ -398,7 +436,8 @@ async fn test_chaos_malformed_json_upstream() {
         }
     });
 
-    let (status, _) = proxy_request(addr, "/alpha/generate", "POST", Some(r#"{"test":true}"#)).await;
+    let (status, _) =
+        proxy_request(addr, "/alpha/generate", "POST", Some(r#"{"test":true}"#)).await;
     assert!(status == 200 || status == 502);
 }
 
@@ -409,7 +448,8 @@ async fn test_chaos_connection_refused() {
         "/alpha/generate",
         "POST",
         Some(r#"{"test":true}"#),
-    ).await;
+    )
+    .await;
     // Connection refused — reqwest may panic or return error
     // Just verify we don't hang forever
     assert!(result.0 != 200 || result.1.contains("error"));
@@ -436,7 +476,8 @@ async fn test_chaos_duplicate_finish_events() {
         ..MockUpstream::normal()
     };
     let addr = mock.start().await;
-    let (status, _) = proxy_request(addr, "/alpha/generate", "POST", Some(r#"{"test":true}"#)).await;
+    let (status, _) =
+        proxy_request(addr, "/alpha/generate", "POST", Some(r#"{"test":true}"#)).await;
     assert!(status == 200 || status == 502);
 }
 
@@ -457,7 +498,8 @@ async fn test_chaos_huge_payload() {
         ..MockUpstream::normal()
     };
     let addr = mock.start().await;
-    let (status, body) = proxy_request(addr, "/alpha/generate", "POST", Some(r#"{"test":true}"#)).await;
+    let (status, body) =
+        proxy_request(addr, "/alpha/generate", "POST", Some(r#"{"test":true}"#)).await;
     assert_eq!(status, 200);
     assert!(body.len() > 100_000);
 }
@@ -474,9 +516,15 @@ async fn test_chaos_many_chunks() {
         "totalUsage": {"inputTokens": 10, "outputTokens": 500, "inputTokenDetails": {}}
     }));
 
-    let mock = MockUpstream { events, status: 200, delay_ms: 0, ..MockUpstream::normal() };
+    let mock = MockUpstream {
+        events,
+        status: 200,
+        delay_ms: 0,
+        ..MockUpstream::normal()
+    };
     let addr = mock.start().await;
-    let (status, body) = proxy_request(addr, "/alpha/generate", "POST", Some(r#"{"test":true}"#)).await;
+    let (status, body) =
+        proxy_request(addr, "/alpha/generate", "POST", Some(r#"{"test":true}"#)).await;
     assert_eq!(status, 200);
     assert!(body.len() > 10000);
 }
@@ -497,7 +545,8 @@ async fn test_concurrent_100_requests() {
                 "/alpha/generate",
                 "POST",
                 Some(&format!(r#"{{"test":{}}}"#, i)),
-            ).await
+            )
+            .await
         }));
     }
 
@@ -527,7 +576,8 @@ async fn test_concurrent_mixed_methods() {
                 "/alpha/generate",
                 "POST",
                 Some(&format!(r#"{{"test":{}}}"#, i)),
-            ).await
+            )
+            .await
         }));
     }
 
@@ -582,7 +632,8 @@ fn test_model_catalog_providers() {
     if catalog.is_empty() {
         return; // Skip if CLI not installed in test env
     }
-    let providers: std::collections::HashSet<_> = catalog.values().map(|m| m.provider.as_ref()).collect();
+    let providers: std::collections::HashSet<_> =
+        catalog.values().map(|m| m.provider.as_ref()).collect();
     assert!(providers.contains("openai") || providers.contains("anthropic"));
 }
 
@@ -632,10 +683,19 @@ fn test_error_types() {
 fn test_finish_reason_mapping() {
     use proxy_core::types::FinishReason;
     assert_eq!(FinishReason::from_upstream("stop"), FinishReason::Stop);
-    assert_eq!(FinishReason::from_upstream("tool_use"), FinishReason::ToolCalls);
-    assert_eq!(FinishReason::from_upstream("tool-calls"), FinishReason::ToolCalls);
+    assert_eq!(
+        FinishReason::from_upstream("tool_use"),
+        FinishReason::ToolCalls
+    );
+    assert_eq!(
+        FinishReason::from_upstream("tool-calls"),
+        FinishReason::ToolCalls
+    );
     assert_eq!(FinishReason::from_upstream("length"), FinishReason::Length);
-    assert_eq!(FinishReason::from_upstream("max_tokens"), FinishReason::Length);
+    assert_eq!(
+        FinishReason::from_upstream("max_tokens"),
+        FinishReason::Length
+    );
     assert_eq!(FinishReason::from_upstream("unknown"), FinishReason::Stop);
 }
 
@@ -674,7 +734,11 @@ async fn test_benchmark_through_proxy_vs_direct() {
     // Temp auth dir so AuthManager.build_headers() succeeds.
     let auth_dir = std::env::temp_dir().join(format!("cc-proxy-bench-auth-{}", std::process::id()));
     std::fs::create_dir_all(&auth_dir).unwrap();
-    std::fs::write(auth_dir.join("auth.json"), r#"{"apiKey":"bench-key-1234567890"}"#).unwrap();
+    std::fs::write(
+        auth_dir.join("auth.json"),
+        r#"{"apiKey":"bench-key-1234567890"}"#,
+    )
+    .unwrap();
     std::fs::write(auth_dir.join("config.json"), r#"{}"#).unwrap();
 
     // Pick a free port for the real proxy.
@@ -792,18 +856,49 @@ async fn test_benchmark_through_proxy_vs_direct() {
     let dp95 = percentile(&direct_sorted, 0.95);
     let dp99 = percentile(&direct_sorted, 0.99);
 
-    eprintln!("[bench] proxy  : p50={:.3}ms p95={:.3}ms p99={:.3}ms ({} ok)", pp50, pp95, pp99, proxy_ok);
-    eprintln!("[bench] direct : p50={:.3}ms p95={:.3}ms p99={:.3}ms ({} ok)", dp50, dp95, dp99, direct_ok);
-    eprintln!("[bench] overhead: p50=+{:.3}ms p95=+{:.3}ms p99=+{:.3}ms", pp50 - dp50, pp95 - dp95, pp99 - dp99);
+    eprintln!(
+        "[bench] proxy  : p50={:.3}ms p95={:.3}ms p99={:.3}ms ({} ok)",
+        pp50, pp95, pp99, proxy_ok
+    );
+    eprintln!(
+        "[bench] direct : p50={:.3}ms p95={:.3}ms p99={:.3}ms ({} ok)",
+        dp50, dp95, dp99, direct_ok
+    );
+    eprintln!(
+        "[bench] overhead: p50=+{:.3}ms p95=+{:.3}ms p99=+{:.3}ms",
+        pp50 - dp50,
+        pp95 - dp95,
+        pp99 - dp99
+    );
 
     // Both paths must be reliable.
-    assert!(proxy_ok >= n * 98 / 100, "proxy success rate too low: {}/{}", proxy_ok, n);
-    assert!(direct_ok >= n * 98 / 100, "direct success rate too low: {}/{}", direct_ok, n);
+    assert!(
+        proxy_ok >= n * 98 / 100,
+        "proxy success rate too low: {}/{}",
+        proxy_ok,
+        n
+    );
+    assert!(
+        direct_ok >= n * 98 / 100,
+        "direct success rate too low: {}/{}",
+        direct_ok,
+        n
+    );
 
     // Proxy overhead must stay small on warm loopback. Bounds are relative to
     // the direct path so CI noise (which affects both paths equally) cancels.
-    assert!(pp50 < dp50 + 2.0, "proxy p50 overhead too high: {:.3}ms vs direct {:.3}ms", pp50, dp50);
-    assert!(pp99 < dp99 + 10.0, "proxy p99 overhead too high: {:.3}ms vs direct {:.3}ms", pp99, dp99);
+    assert!(
+        pp50 < dp50 + 2.0,
+        "proxy p50 overhead too high: {:.3}ms vs direct {:.3}ms",
+        pp50,
+        dp50
+    );
+    assert!(
+        pp99 < dp99 + 10.0,
+        "proxy p99 overhead too high: {:.3}ms vs direct {:.3}ms",
+        pp99,
+        dp99
+    );
 }
 
 // ============================================================
@@ -829,7 +924,11 @@ async fn start_proxy_impl(
         mock_addr.port()
     ));
     std::fs::create_dir_all(&auth_dir).unwrap();
-    std::fs::write(auth_dir.join("auth.json"), r#"{"apiKey":"chaos-key-1234567890"}"#).unwrap();
+    std::fs::write(
+        auth_dir.join("auth.json"),
+        r#"{"apiKey":"chaos-key-1234567890"}"#,
+    )
+    .unwrap();
     std::fs::write(auth_dir.join("config.json"), r#"{}"#).unwrap();
 
     let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -884,7 +983,8 @@ async fn start_proxy_impl(
 }
 
 /// Minimal streaming chat request body (passes the upstream validator).
-const CHAT_BODY: &str = r#"{"model":"xiaomi/mimo-v2.5","stream":true,"messages":[{"role":"user","content":"hi"}]}"#;
+const CHAT_BODY: &str =
+    r#"{"model":"xiaomi/mimo-v2.5","stream":true,"messages":[{"role":"user","content":"hi"}]}"#;
 
 async fn proxy_chat(proxy_url: &str, body: &str) -> (u16, String) {
     let client = reqwest::Client::builder()
@@ -918,7 +1018,11 @@ async fn test_chaos_through_proxy_retry_then_success() {
     let proxy = start_proxy(mock_addr, 2, 180).await;
 
     let (status, body) = proxy_chat(&proxy, CHAT_BODY).await;
-    assert_eq!(status, 200, "retry-then-success should end at 200, got: {}", body);
+    assert_eq!(
+        status, 200,
+        "retry-then-success should end at 200, got: {}",
+        body
+    );
     assert!(body.contains("Hello"));
     assert!(body.contains("[DONE]"));
 }
@@ -933,7 +1037,11 @@ async fn test_chaos_through_proxy_retry_exhaustion() {
     let proxy = start_proxy(mock_addr, 2, 180).await;
 
     let (status, body) = proxy_chat(&proxy, CHAT_BODY).await;
-    assert_eq!(status, 503, "exhausted retries must surface 503, got: {}", body);
+    assert_eq!(
+        status, 503,
+        "exhausted retries must surface 503, got: {}",
+        body
+    );
     assert!(body.contains("upstream error"));
 }
 
@@ -956,7 +1064,10 @@ async fn test_chaos_through_proxy_mid_stream_reset() {
     assert_eq!(status, 200);
     assert!(body.contains("partial"));
     assert!(!body.contains("never-seen"));
-    assert!(!body.contains("[DONE]"), "aborted stream must not end with [DONE]");
+    assert!(
+        !body.contains("[DONE]"),
+        "aborted stream must not end with [DONE]"
+    );
 }
 
 #[tokio::test]
@@ -975,7 +1086,10 @@ async fn test_chaos_through_proxy_truncated_final_line() {
     let (status, body) = proxy_chat(&proxy, CHAT_BODY).await;
     assert_eq!(status, 200);
     assert!(body.contains("Hello"));
-    assert!(body.contains("[DONE]"), "stream must terminate cleanly after truncated line");
+    assert!(
+        body.contains("[DONE]"),
+        "stream must terminate cleanly after truncated line"
+    );
 }
 
 #[tokio::test]
@@ -998,14 +1112,25 @@ async fn test_chaos_through_proxy_truncated_mid_record_no_done() {
     let (status, body) = proxy_chat(&proxy, CHAT_BODY).await;
     assert_eq!(status, 200);
     assert!(body.contains("partial"));
-    assert!(!body.contains("[DONE]"), "truncated stream must not end with [DONE]: {}", body);
+    assert!(
+        !body.contains("[DONE]"),
+        "truncated stream must not end with [DONE]: {}",
+        body
+    );
 
     // The truncated-stream counter must be non-zero.
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .unwrap();
-    let metrics = client.get(format!("{}/metrics", proxy)).send().await.unwrap().text().await.unwrap();
+    let metrics = client
+        .get(format!("{}/metrics", proxy))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
     assert!(
         metrics.contains("command_code_proxy_truncated_streams_total 1"),
         "expected a truncated-stream metric, got: {}",
@@ -1026,7 +1151,10 @@ async fn test_auth_refresh_on_401_succeeds_once() {
     let proxy = start_proxy(mock_addr, 0, 180).await;
 
     let (status, body) = proxy_chat(&proxy, CHAT_BODY).await;
-    assert_eq!(status, 200, "auth-refresh retry must succeed, got {status}: {body}");
+    assert_eq!(
+        status, 200,
+        "auth-refresh retry must succeed, got {status}: {body}"
+    );
     assert!(body.contains("Hello"));
 }
 
@@ -1046,7 +1174,11 @@ async fn test_chaos_through_proxy_garbage_stream() {
 
     let (status, body) = proxy_chat(&proxy, CHAT_BODY).await;
     assert_eq!(status, 200);
-    assert!(body.contains("recovered"), "valid events after garbage must flow: {}", body);
+    assert!(
+        body.contains("recovered"),
+        "valid events after garbage must flow: {}",
+        body
+    );
     assert!(body.contains("[DONE]"));
 }
 
@@ -1066,7 +1198,11 @@ async fn test_chaos_through_proxy_events_after_finish_forwarded() {
     let (status, body) = proxy_chat(&proxy, CHAT_BODY).await;
     assert_eq!(status, 200);
     // Current contract: trailing deltas after finish are forwarded as-is.
-    assert!(body.contains("after-finish"), "events after finish must be forwarded: {}", body);
+    assert!(
+        body.contains("after-finish"),
+        "events after finish must be forwarded: {}",
+        body
+    );
     assert!(body.contains("[DONE]"));
 }
 
@@ -1086,9 +1222,17 @@ async fn test_chaos_through_proxy_error_event_stops_stream() {
     let (status, body) = proxy_chat(&proxy, CHAT_BODY).await;
     assert_eq!(status, 200);
     assert!(body.contains("before"));
-    assert!(body.contains("boom"), "error event must be surfaced: {}", body);
+    assert!(
+        body.contains("boom"),
+        "error event must be surfaced: {}",
+        body
+    );
     assert!(body.contains("[DONE]"));
-    assert!(!body.contains("after-error"), "stream must stop at error event: {}", body);
+    assert!(
+        !body.contains("after-error"),
+        "stream must stop at error event: {}",
+        body
+    );
 }
 
 #[tokio::test]
@@ -1096,7 +1240,10 @@ async fn test_chaos_through_proxy_oversized_body() {
     let mock_addr = MockUpstream::normal().start().await;
     let proxy = start_proxy(mock_addr, 0, 180).await;
 
-    let big = format!(r#"{{"model":"x","messages":[],"junk":"{}"}}"#, "y".repeat(11 * 1024 * 1024));
+    let big = format!(
+        r#"{{"model":"x","messages":[],"junk":"{}"}}"#,
+        "y".repeat(11 * 1024 * 1024)
+    );
     let (status, _) = proxy_chat(&proxy, &big).await;
     assert_eq!(status, 413, "oversized body must be rejected with 413");
 }
@@ -1113,7 +1260,10 @@ async fn test_chaos_through_proxy_invalid_json_body() {
 
 #[tokio::test]
 async fn test_chaos_through_proxy_upstream_500() {
-    let mock = MockUpstream { status: 500, ..MockUpstream::normal() };
+    let mock = MockUpstream {
+        status: 500,
+        ..MockUpstream::normal()
+    };
     let mock_addr = mock.start().await;
     let proxy = start_proxy(mock_addr, 2, 180).await;
 
@@ -1145,7 +1295,10 @@ async fn test_chaos_through_proxy_trickle_stream() {
         assert!(body.contains(&format!("t{}", i)), "missing chunk t{}", i);
     }
     assert!(body.contains("[DONE]"));
-    assert!(start.elapsed() >= std::time::Duration::from_millis(300), "trickle pacing not observed");
+    assert!(
+        start.elapsed() >= std::time::Duration::from_millis(300),
+        "trickle pacing not observed"
+    );
 }
 
 #[tokio::test]
@@ -1166,7 +1319,10 @@ async fn test_chaos_through_proxy_idle_timeout_abort() {
     let (status, body) = proxy_chat(&proxy, CHAT_BODY).await;
     assert_eq!(status, 200);
     assert!(body.contains("first"));
-    assert!(!body.contains("[DONE]"), "idle-timeout abort must not emit [DONE]");
+    assert!(
+        !body.contains("[DONE]"),
+        "idle-timeout abort must not emit [DONE]"
+    );
     assert!(start.elapsed() >= std::time::Duration::from_secs(1));
 }
 
@@ -1183,7 +1339,11 @@ async fn test_e2e_metrics_endpoint() {
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .unwrap();
-    let resp = client.get(format!("{}/metrics", proxy)).send().await.unwrap();
+    let resp = client
+        .get(format!("{}/metrics", proxy))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status().as_u16(), 200);
     let ct = resp
         .headers()
@@ -1243,8 +1403,16 @@ async fn test_e2e_incoming_auth_required() {
     assert_eq!(resp.status().as_u16(), 200);
 
     // /health and /metrics stay open without a token.
-    let health = client.get(format!("{}/health", proxy)).send().await.unwrap();
+    let health = client
+        .get(format!("{}/health", proxy))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(health.status().as_u16(), 200);
-    let metrics = client.get(format!("{}/metrics", proxy)).send().await.unwrap();
+    let metrics = client
+        .get(format!("{}/metrics", proxy))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(metrics.status().as_u16(), 200);
 }

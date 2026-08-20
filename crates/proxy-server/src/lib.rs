@@ -29,8 +29,16 @@ impl ProxyService {
         server.bootstrap();
 
         let listen_addr = self.config.listen_addr.clone();
-        let tls_cert = self.config.tls_cert.as_ref().map(|p| p.display().to_string());
-        let tls_key = self.config.tls_key.as_ref().map(|p| p.display().to_string());
+        let tls_cert = self
+            .config
+            .tls_cert
+            .as_ref()
+            .map(|p| p.display().to_string());
+        let tls_key = self
+            .config
+            .tls_key
+            .as_ref()
+            .map(|p| p.display().to_string());
         let metrics = Arc::new(Metrics::new());
         let upstream_client = Arc::new(UpstreamClient::new(
             self.config.clone(),
@@ -109,9 +117,15 @@ mod tests {
 
     #[test]
     fn test_extract_host() {
-        assert_eq!(extract_host("https://api.commandcode.ai").unwrap(), "api.commandcode.ai");
+        assert_eq!(
+            extract_host("https://api.commandcode.ai").unwrap(),
+            "api.commandcode.ai"
+        );
         assert_eq!(extract_host("http://localhost:9090").unwrap(), "localhost");
-        assert_eq!(extract_host("https://api.commandcode.ai/alpha/generate").unwrap(), "api.commandcode.ai");
+        assert_eq!(
+            extract_host("https://api.commandcode.ai/alpha/generate").unwrap(),
+            "api.commandcode.ai"
+        );
     }
 
     #[test]

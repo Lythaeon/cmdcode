@@ -29,10 +29,10 @@ pub struct ProxyConfig {
 
 impl ProxyConfig {
     pub fn from_env() -> Result<Self, ConfigError> {
-        let listen_host = env::var("COMMAND_CODE_PROXY_HOST")
-            .unwrap_or_else(|_| "127.0.0.1".to_string());
-        let listen_port = env::var("COMMAND_CODE_PROXY_PORT")
-            .unwrap_or_else(|_| "18080".to_string());
+        let listen_host =
+            env::var("COMMAND_CODE_PROXY_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+        let listen_port =
+            env::var("COMMAND_CODE_PROXY_PORT").unwrap_or_else(|_| "18080".to_string());
         let listen_addr = format!("{}:{}", listen_host, listen_port);
 
         let upstream_url = env::var("COMMAND_CODE_API_BASE")
@@ -81,11 +81,11 @@ impl ProxyConfig {
             .parse()
             .unwrap_or(30);
 
-        let log_level = env::var("COMMAND_CODE_PROXY_LOG_LEVEL")
-            .unwrap_or_else(|_| "info".to_string());
+        let log_level =
+            env::var("COMMAND_CODE_PROXY_LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
 
         let max_body_size = env::var("COMMAND_CODE_PROXY_MAX_BODY_SIZE")
-            .unwrap_or_else(|_| "10485760".to_string())  // 10MB default
+            .unwrap_or_else(|_| "10485760".to_string()) // 10MB default
             .parse()
             .unwrap_or(10 * 1024 * 1024);
 
@@ -100,7 +100,7 @@ impl ProxyConfig {
             .map(PathBuf::from);
 
         let log_max_bytes = env::var("COMMAND_CODE_PROXY_LOG_MAX_BYTES")
-            .unwrap_or_else(|_| "52428800".to_string())  // 50MB default
+            .unwrap_or_else(|_| "52428800".to_string()) // 50MB default
             .parse()
             .unwrap_or(50 * 1024 * 1024);
 
