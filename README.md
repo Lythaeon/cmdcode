@@ -24,19 +24,32 @@ traffic from the official `cmd` CLI.
 
 ### Prerequisites
 
-You need a working Command Code CLI login first — the proxy reads your
-upstream credentials from the same place the `cmd` CLI does
-(`~/.commandcode/auth.json`):
+**You must have the `command-code` CLI installed and logged in.** It is a
+hard dependency for two reasons:
+
+1. **Auth** — the proxy reads your upstream credentials from the same place
+   the `cmd` CLI does (`~/.commandcode/auth.json`), written by `cmd login`.
+2. **Model catalog** — the proxy auto-discovers your model list from the CLI's
+   bundled `models.md` (parsed into `/v1/models` with providers, reasoning
+   effort levels, and context windows).
+
+Install and log in:
 
 ```bash
+npm install -g command-code
 command-code login
 ```
 
-Verify it worked:
+Verify both artifacts exist:
 
 ```bash
 ls ~/.commandcode/auth.json
+ls ~/.linuxbrew/lib/node_modules/command-code/dist/bundled/command-code-knowledge/reference/models.md
 ```
+
+If the CLI's `models.md` is not found at a standard location, you can point the
+proxy at it explicitly with `COMMAND_CODE_PROXY_MODELS_CATALOG=/path/to/models.md`.
+With neither, the proxy still serves requests but `/v1/models` returns empty.
 
 ### Install
 
