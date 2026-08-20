@@ -1539,6 +1539,87 @@ async fn test_concurrency_matrix() {
     }
 }
 
+/// Regression test for the concurrency semaphore permit guard.
+///
+/// If `let _ = _permit;` were reintroduced (dropping the permit immediately
+/// instead of holding it for the stream duration), both concurrent requests
+/// would acquire permits simultaneously and stream in parallel. This test
+/// detects that regression by verifying the second request's response is
+/// blocked until after the first stream completes.
+///
+/// The mock streams 3 events with 300ms gaps (2 gaps = ~600ms per stream).
+/// With max_concurrent=1 and a held permit the second stream cannot begin
+/// until the first finishes, so the gap between their completion times must
+/// be >= ~500ms.  If the bug is present, both streams run concurrently and
+/// the gap collapses to ~0ms.
+#[tokio::test]
+async fn test_semaphore_held_during_stream() {
+    let mock = MockUpstream {
+        events: vec![
+            serde_json::json!({"type": "text-delta", "text": "a"}),
+            serde_json::json!({"type": "text-delta", "text": "b"}),
+            serde_json::json!({"type": "finish", "finishReason": "stop", "totalUsage": {"inputTokens": 1, "outputTokens": 1, "inputTokenDetails": {}}}),
+        ],
+        chunk_gap_ms: 300,
+        ..MockUpstream::normal()
+    };
+    let mock_addr = mock.start().await;
+    // Concurrency cap of 1: only one stream permit at a time.
+    let proxy = start_proxy_impl(mock_addr, 0, 30, None, 1).await;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .unwrap();
+    let url = format!("{}/v1/chat/completions", proxy);
+
+    // Fire two concurrent streaming requests. Each sender transmits the time
+    // at which the response stream completed.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<f64>(2);
+    for _ in 0..2 {
+        let tx = tx.clone();
+        let client = client.clone();
+        let url = url.clone();
+        tokio::spawn(async move {
+            let start = std::time::Instant::now();
+            let resp = client
+                .post(&url)
+                .header("content-type", "application/json")
+                .header("authorization", "Bearer chaos-key-1234567890")
+                .body(CHAT_BODY)
+                .send()
+                .await;
+            if let Ok(r) = resp {
+                let _ = r.text().await;
+            }
+            let _ = tx.send(start.elapsed().as_secs_f64() * 1000.0).await;
+        });
+    }
+    drop(tx);
+
+    let mut finishes = Vec::new();
+    while let Some(t) = rx.recv().await {
+        finishes.push(t);
+    }
+    finishes.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(finishes.len(), 2, "both streams must complete");
+
+    // The gap between finish times must be >= the stream duration.  If the
+    // semaphore permit is dropped immediately (the old bug), both streams run
+    // concurrently and finishes[1] - finishes[0] ≈ 0ms, failing this check.
+    let gap = finishes[1] - finishes[0];
+    let min_expected_gap = 500.0; // conservative lower bound (2 gaps × 300ms)
+    assert!(
+        gap >= min_expected_gap,
+        "semaphore permit was not held during streaming: \
+         first stream finished at {first:.0}ms, second at {second:.0}ms \
+         (gap={gap:.0}ms < {min_expected_gap:.0}ms). \
+         Regression: _permit_guard fix may have been reverted.",
+        first = finishes[0],
+        second = finishes[1],
+    );
+}
+
 #[tokio::test]
 async fn test_max_concurrent_serializes_streams() {
     // A slow streaming mock (one text delta, then a finish after a gap) so a

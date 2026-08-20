@@ -60,3 +60,65 @@ jobs:
 
     - name: Run tests
       run: cargo test --workspace
+
+  fuzz-regression:
+    name: Fuzz regression (nightly, 30s/target)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust nightly
+      uses: dtolnay/rust-toolchain@nightly
+      with:
+        components: rustfmt
+
+    - name: Rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: ci-fuzz
+        cache-on-failure: true
+        cache-targets: true
+        save-if: true
+
+    - name: Install cargo-fuzz
+      run: cargo install cargo-fuzz
+
+    - name: Fuzz fuzz_wire_format
+      run: cargo fuzz run fuzz_wire_format -- -max_total_time=30
+      working-directory: crates/proxy-core
+
+    - name: Fuzz fuzz_upstream_events
+      run: cargo fuzz run fuzz_upstream_events -- -max_total_time=30
+      working-directory: crates/proxy-core
+
+    - name: Fuzz fuzz_auth
+      run: cargo fuzz run fuzz_auth -- -max_total_time=30
+      working-directory: crates/proxy-core
+
+    - name: Fuzz fuzz_auth_data
+      run: cargo fuzz run fuzz_auth_data -- -max_total_time=30
+      working-directory: crates/proxy-core
+
+    - name: Fuzz fuzz_catalog
+      run: cargo fuzz run fuzz_catalog -- -max_total_time=30
+      working-directory: crates/proxy-core
+
+    - name: Fuzz fuzz_model_catalog
+      run: cargo fuzz run fuzz_model_catalog -- -max_total_time=30
+      working-directory: crates/proxy-core
+
+    - name: Fuzz fuzz_messages
+      run: cargo fuzz run fuzz_messages -- -max_total_time=30
+      working-directory: crates/proxy-core
+
+    - name: Fuzz fuzz_tools
+      run: cargo fuzz run fuzz_tools -- -max_total_time=30
+      working-directory: crates/proxy-core
+
+    - name: Fuzz fuzz_request_body
+      run: cargo fuzz run fuzz_request_body -- -max_total_time=30
+      working-directory: crates/proxy-core
+
+    - name: Fuzz fuzz_model_effort
+      run: cargo fuzz run fuzz_model_effort -- -max_total_time=30
+      working-directory: crates/proxy-core
