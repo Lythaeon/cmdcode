@@ -1,5 +1,5 @@
 [package]
-name = "cmdcode-cli"
+name = "cmdcode"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
