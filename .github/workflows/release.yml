@@ -52,7 +52,7 @@ jobs:
         run: |
           set -euo pipefail
           tag_version="${GITHUB_REF_NAME#v}"
-          package_version="$(cargo pkgid -p cmdcode-cli | sed -E 's/.*#([^#]+)$/\1/')"
+          package_version="$(cargo pkgid -p cmdcode | sed -E 's/.*#([^#]+)$/\1/')"
           if [[ "${tag_version}" != "${package_version}" ]]; then
             echo "Release tag ${GITHUB_REF_NAME} does not match Cargo package version ${package_version}" >&2
             exit 1
@@ -94,11 +94,32 @@ jobs:
             exit 1
           fi
 
-          # Publish internal crates first (dependency order), then the CLI
-          for crate in cmdcode-core cmdcode-server cmdcode-cli; do
-            version="$(cargo pkgid -p "${crate}" | sed -E 's/.*#//; s/.*@//')"
-            echo "Publishing ${crate} ${version}..."
+          crate_version() {
+            cargo pkgid -p "$1" | sed -E 's/.*#//; s/.*@//'
+          }
+
+          crate_version_published() {
+            local crate="$1"
+            local version="$2"
+            curl --fail --silent --show-error --retry 3 --retry-delay 3 \
+              -H "User-Agent: cmdcode-release-ci (curl)" \
+              "https://crates.io/api/v1/crates/${crate}/${version}" \
+              >/dev/null 2>&1
+          }
+
+          # Publish in dependency order: core → server → CLI
+          for crate in cmdcode-core cmdcode-server cmdcode; do
+            version="$(crate_version "${crate}")"
+            if crate_version_published "${crate}" "${version}"; then
+              echo "${crate} ${version} already exists on crates.io; skipping"
+              continue
+            fi
             if ! cargo publish --locked -p "${crate}"; then
+              # Handle concurrent publish race condition
+              if crate_version_published "${crate}" "${version}"; then
+                echo "${crate} ${version} was published concurrently; continuing"
+                continue
+              fi
               echo "Failed to publish ${crate} ${version}" >&2
               exit 1
             fi
