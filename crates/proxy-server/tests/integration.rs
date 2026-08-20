@@ -942,7 +942,7 @@ async fn start_proxy_impl(
         default_model: "xiaomi/mimo-v2.5".into(),
         upstream_timeout_secs: 30,
         max_retries: retries,
-        max_concurrent: max_concurrent,
+        max_concurrent,
         cors_origin: None,
         model_allowlist: None,
         auth_dir: auth_dir.clone(),
