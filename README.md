@@ -22,6 +22,24 @@ traffic from the official `cmd` CLI.
 
 ## Quick start
 
+### Prerequisites
+
+You need a working Command Code CLI login first — the proxy reads your
+upstream credentials from the same place the `cmd` CLI does
+(`~/.commandcode/auth.json`):
+
+```bash
+command-code login
+```
+
+Verify it worked:
+
+```bash
+ls ~/.commandcode/auth.json
+```
+
+### Install
+
 ```bash
 # Install from crates.io (requires Rust 1.75+)
 cargo install cmdcode
@@ -30,17 +48,43 @@ cargo install cmdcode
 git clone https://github.com/Lythaeon/cmdcode.git
 cd cmdcode
 cargo install --path crates/cmdcode-cli
+```
 
-# Run
-cargo run --release
+### Run
+
+```bash
+cmdcode
 # listening on http://127.0.0.1:18080
+```
 
-# Test
+If you want to require a bearer token on API routes (recommended for
+non-localhost exposure), set `COMMAND_CODE_PROXY_INCOMING_TOKEN` before
+starting:
+
+```bash
+COMMAND_CODE_PROXY_INCOMING_TOKEN=my-secret-token cmdcode
+```
+
+### Test
+
+```bash
+# Health check (always unauthenticated)
+curl http://127.0.0.1:18080/health
+
+# List models (unauthenticated unless a token is set)
 curl http://127.0.0.1:18080/v1/models
+
+# Send a completion
+# If COMMAND_CODE_PROXY_INCOMING_TOKEN is set, add:
+#   -H "Authorization: Bearer $COMMAND_CODE_PROXY_INCOMING_TOKEN"
 curl http://127.0.0.1:18080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"xiaomi/mimo-v2.5","messages":[{"role":"user","content":"Hello"}]}'
 ```
+
+`/health`, `/metrics`, and `/v1/models` are always served unauthenticated
+for monitors and scrapers. When `COMMAND_CODE_PROXY_INCOMING_TOKEN` is set,
+every other route requires `Authorization: Bearer <token>`.
 
 ## Features
 
