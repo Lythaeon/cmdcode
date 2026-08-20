@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: "Publish to crates.io and create GitHub release"
+        description: "Publish crates and create GitHub release"
         required: true
         default: "false"
         type: choice
@@ -46,13 +46,23 @@ jobs:
             exit 1
           fi
 
+      - name: Validate publish ref
+        if: github.event_name == 'workflow_dispatch' && inputs.publish == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
+            echo "Manual publish must be run from a release tag, not ${GITHUB_REF_TYPE} ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+
       - name: Validate release version
         if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true')
         shell: bash
         run: |
           set -euo pipefail
           tag_version="${GITHUB_REF_NAME#v}"
-          package_version="$(cargo pkgid -p cmdcode | sed -E 's/.*@//')"
+          package_version="$(cargo pkgid -p cmdcode | sed -E 's/.*#([^#]+)$/\1/')"
           if [[ "${tag_version}" != "${package_version}" ]]; then
             echo "Release tag ${GITHUB_REF_NAME} does not match Cargo package version ${package_version}" >&2
             exit 1
@@ -74,23 +84,24 @@ jobs:
             -C target/release cmdcode
           cd dist && sha256sum cmdcode-*.tar.gz > cmdcode-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.sha256
 
-      - name: Create GitHub release
+      - name: Derive publish order from cargo metadata
+        # CRATE_PACKAGES is derived from the cargo-metadata dependency graph
+        # (dependency-first topological order, runtime AND dev edges included)
+        # by scripts/publish-order.py.
         if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true')
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
-        with:
-          files: |
-            dist/*.tar.gz
-            dist/*.sha256
-
-      - name: Publish to crates.io
-        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true')
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
+          echo "CRATE_PACKAGES=$(python3 scripts/publish-order.py --emit | tr '\n' ' ')" >> "${GITHUB_ENV}"
+
+      - name: Publish crates.io packages
+        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true')
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
           if [[ -z "${CARGO_REGISTRY_TOKEN:-}" ]]; then
-            echo "CARGO_REGISTRY_TOKEN secret is required to publish to crates.io" >&2
+            echo "CARGO_REGISTRY_TOKEN secret is required to publish crates" >&2
             exit 1
           fi
 
@@ -107,15 +118,16 @@ jobs:
               >/dev/null 2>&1
           }
 
-          # Publish in dependency order: core → server → CLI
-          for crate in cmdcode-core cmdcode-server cmdcode; do
+          for crate in ${CRATE_PACKAGES}; do
             version="$(crate_version "${crate}")"
             if crate_version_published "${crate}" "${version}"; then
               echo "${crate} ${version} already exists on crates.io; skipping"
               continue
             fi
             if ! cargo publish --locked -p "${crate}"; then
-              # Handle concurrent publish race condition
+              # A concurrent, restartable release may have completed this exact
+              # publish between the preflight check and cargo publish. Only
+              # tolerate that verified outcome; every other failure aborts.
               if crate_version_published "${crate}" "${version}"; then
                 echo "${crate} ${version} was published concurrently; continuing"
                 continue
@@ -126,3 +138,27 @@ jobs:
             echo "${crate} ${version} published successfully"
             sleep 15
           done
+
+      - name: Verify published crates.io packages
+        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true')
+        shell: bash
+        run: |
+          set -euo pipefail
+          crate_version() {
+            cargo pkgid -p "$1" | sed -E 's/.*#//; s/.*@//'
+          }
+          for crate in ${CRATE_PACKAGES}; do
+            version="$(crate_version "${crate}")"
+            curl --fail --silent --show-error --retry 5 --retry-delay 5 \
+              -H "User-Agent: cmdcode-release-ci (curl)" \
+              "https://crates.io/api/v1/crates/${crate}/${version}" >/dev/null
+            sleep 2
+          done
+
+      - name: Publish GitHub release assets
+        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true')
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
