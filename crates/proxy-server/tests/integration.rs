@@ -1416,3 +1416,122 @@ async fn test_e2e_incoming_auth_required() {
         .unwrap();
     assert_eq!(metrics.status().as_u16(), 200);
 }
+
+// ============================================================
+// Concurrency benchmark matrix
+// ============================================================
+
+/// Fire `total` requests through the proxy with `concurrency` workers in
+/// flight at once. Returns per-request latencies (ms) and TTFB (ms).
+async fn run_concurrent_chat(
+    proxy: &str,
+    concurrency: usize,
+    total: usize,
+) -> (Vec<f64>, Vec<f64>) {
+    use futures::StreamExt;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .pool_max_idle_per_host(256)
+        .build()
+        .unwrap();
+    let url = format!("{}/v1/chat/completions", proxy);
+
+    // Each element is an (index, latency_ms) so we can detect drops.
+    let work = 0..total;
+    let results: Vec<(usize, f64, f64)> = futures::stream::iter(work)
+        .map(|i| {
+            let client = &client;
+            let url = &url;
+            async move {
+                let start = std::time::Instant::now();
+                let resp = client
+                    .post(url)
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer chaos-key-1234567890")
+                    .body(CHAT_BODY)
+                    .send()
+                    .await;
+                let ttfb = start.elapsed().as_secs_f64() * 1000.0;
+                if let Ok(r) = resp {
+                    let _ = r.bytes().await;
+                }
+                let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+                (i, elapsed, ttfb)
+            }
+        })
+        .buffer_unordered(concurrency)
+        .collect::<Vec<_>>()
+        .await;
+
+    let mut lat = Vec::with_capacity(total);
+    let mut ttfb = Vec::with_capacity(total);
+    let mut seen: Vec<bool> = vec![false; total];
+    for (i, l, t) in results {
+        lat.push(l);
+        ttfb.push(t);
+        seen[i] = true;
+    }
+    assert!(
+        seen.iter().all(|s| *s),
+        "lost {} results; expected {}",
+        seen.iter().filter(|s| !**s).count(),
+        total
+    );
+    (lat, ttfb)
+}
+
+/// Concurrency benchmark: exercises the proxy under increasing parallel load.
+/// Prints a latency/throughput matrix and asserts sane success + latency bounds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn test_concurrency_matrix() {
+    // A streaming mock so the proxy's SSE path is exercised.
+    let mock = MockUpstream {
+        events: vec![
+            serde_json::json!({"type": "text-delta", "text": "hello "}),
+            serde_json::json!({"type": "text-delta", "text": "world"}),
+            serde_json::json!({"type": "finish", "finishReason": "stop"}),
+        ],
+        ..MockUpstream::normal()
+    };
+    let mock_addr = mock.start().await;
+    let proxy = start_proxy(mock_addr, 0, 30).await;
+
+    // concurrency -> total requests (keep the matrix fast on CI).
+    let cases: &[(usize, usize)] = &[(1, 20), (10, 40), (50, 100)];
+
+    eprintln!("\n=== Concurrency matrix (streaming) ===");
+    eprintln!(
+        "{:>4} {:>6} {:>10} {:>10} {:>10} {:>10} {:>10}",
+        "conn", "total", "rps", "p50ms", "p95ms", "p99ms", "ttfb50"
+    );
+    for &(conn, total) in cases {
+        let start = std::time::Instant::now();
+        let (mut lat, mut ttfb) = run_concurrent_chat(&proxy, conn, total).await;
+        let wall = start.elapsed().as_secs_f64();
+
+        let ok = lat.len();
+        lat.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        ttfb.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let p50 = percentile(&lat, 0.50);
+        let p95 = percentile(&lat, 0.95);
+        let p99 = percentile(&lat, 0.99);
+        let ttfb50 = percentile(&ttfb, 0.50);
+        let rps = ok as f64 / wall;
+
+        eprintln!(
+            "{:>4} {:>6} {:>10.1} {:>10.3} {:>10.3} {:>10.3} {:>10.3}",
+            conn, ok, rps, p50, p95, p99, ttfb50
+        );
+
+        // Every request must succeed.
+        assert_eq!(ok, total, "not all requests succeeded: {ok}/{}", total);
+        // Sane latency: p99 under 10s. The mock+proxy on loopback is sub-ms,
+        // so this only catches true regressions, not CI noise.
+        assert!(
+            p99 < 10_000.0,
+            "p99 latency too high: {p99:.1}ms at concurrency {conn}"
+        );
+    }
+}
