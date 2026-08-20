@@ -51,6 +51,11 @@ If the CLI's `models.md` is not found at a standard location, you can point the
 proxy at it explicitly with `COMMAND_CODE_PROXY_MODELS_CATALOG=/path/to/models.md`.
 With neither, the proxy still serves requests but `/v1/models` returns empty.
 
+> **Getting new models:** the catalog is read once at proxy startup from the
+> CLI's bundled `models.md`. To see new models under `/v1/models`, update the
+> CLI (`npm update -g command-code`) and restart the proxy. There is no
+> runtime model discovery.
+
 ### Install
 
 ```bash
