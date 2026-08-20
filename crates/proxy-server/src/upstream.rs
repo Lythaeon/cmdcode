@@ -302,7 +302,7 @@ impl UpstreamClient {
                             let _permit_guard = _permit;
                             let _ = metrics;
                             let _ = cancel_inner;
-                            let mut buffer = String::new();
+                            let mut buffer: Vec<u8> = Vec::new();
                             // Cursor into `buffer` for the unconsumed portion.
                             // We search from here and only drain the consumed
                             // prefix once per chunk (amortized) instead of
@@ -326,7 +326,7 @@ impl UpstreamClient {
                                         match chunk {
                                             None => done = true, // clean upstream EOF
                                             Some(Ok(b)) => {
-                                                buffer.push_str(&String::from_utf8_lossy(&b));
+                                                buffer.extend_from_slice(&b);
                                                 // Defense against an upstream that
                                                 // streams data with no newlines: cap
                                                 // the unconsumed buffer so a hostile
@@ -337,11 +337,14 @@ impl UpstreamClient {
                                                     return;
                                                 }
                                                 loop {
-                                                    let rel = buffer[start..].find('\n');
+                                                    let rel = buffer[start..].iter().position(|&b| b == b'\n');
                                                     match rel {
                                                         Some(rel) => {
                                                             let abs = start + rel;
-                                                            let line = buffer[start..abs].trim();
+                                                            // Decode the line bytes to UTF-8 (lossy is OK for individual complete lines)
+                                                            let line = std::str::from_utf8(&buffer[start..abs])
+                                                                .unwrap_or_default()
+                                                                .trim();
                                                             start = abs + 1;
                                                             if line.is_empty() { continue; }
                                                             match translate_line(line, &mut state) {
@@ -383,7 +386,7 @@ impl UpstreamClient {
                             }
 
                             // Clean EOF: flush any residual unterminated record.
-                            let residual = buffer[start..].trim().to_string();
+                            let residual = String::from_utf8_lossy(&buffer[start..]).trim().to_string();
                             if residual.is_empty() {
                                 let _ = tx.send(Ok("data: [DONE]\n\n".to_string())).await;
                             } else {

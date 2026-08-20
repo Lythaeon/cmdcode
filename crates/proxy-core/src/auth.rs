@@ -122,41 +122,6 @@ impl AuthManager {
         *state = None;
     }
 
-    pub async fn health_check(&self) -> HashMap<String, serde_json::Value> {
-        let mut result = HashMap::new();
-        result.insert(
-            "auth_dir".into(),
-            serde_json::Value::String(self.auth_dir.display().to_string()),
-        );
-
-        let auth_file = self.auth_dir.join("auth.json");
-        let config_file = self.auth_dir.join("config.json");
-
-        result.insert(
-            "auth_file_exists".into(),
-            serde_json::Value::Bool(auth_file.exists()),
-        );
-        result.insert(
-            "config_file_exists".into(),
-            serde_json::Value::Bool(config_file.exists()),
-        );
-
-        match self.get_auth_method().await {
-            Ok(AuthMethod::ApiKey(_)) => {
-                result.insert("auth_method".into(), "api_key".into());
-                result.insert("auth_valid".into(), true.into());
-            }
-            Ok(AuthMethod::OAuth { .. }) => {
-                result.insert("auth_method".into(), "oauth".into());
-                result.insert("auth_valid".into(), true.into());
-            }
-            Err(e) => {
-                result.insert("error".into(), e.to_string().into());
-            }
-        }
-
-        result
-    }
 
     async fn refresh(&self) -> Result<(), AuthError> {
         let auth_file = self.auth_dir.join("auth.json");
