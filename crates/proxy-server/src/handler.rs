@@ -259,50 +259,57 @@ impl ProxyHttp for CommandCodeProxy {
                 resp.insert_header("content-type", "text/event-stream")?;
                 resp.insert_header("cache-control", "no-cache")?;
                 resp.insert_header("connection", "keep-alive")?;
-                session.write_response_header(Box::new(resp), false).await?;
+                // If the header write fails (client already gone), we must still
+                // decrement active_streams below — so don't `?`-propagate here.
+                let header_ok = session
+                    .write_response_header(Box::new(resp), false)
+                    .await
+                    .is_ok();
 
                 let idle_timeout =
                     std::time::Duration::from_secs(self.config.stream_idle_timeout_secs);
                 let mut chunks = 0u32;
                 let mut bytes_out = 0usize;
-                let mut client_gone = false;
+                let mut client_gone = !header_ok;
                 let mut abort = false;
-                loop {
-                    let recv = tokio::time::timeout(idle_timeout, rx.recv()).await;
-                    match recv {
-                        Ok(Some(Ok(line))) => {
-                            if let Err(e) = session
-                                .write_response_body(Some(Bytes::from(line.clone())), false)
-                                .await
-                            {
-                                if is_client_disconnect(&e) {
-                                    tracing::warn!(request_id = %ctx.request_id.as_str(), "client disconnected; aborting stream");
-                                    self.metrics.inc_client_disconnect();
-                                    client_gone = true;
-                                } else {
-                                    return Err(e);
+                if header_ok {
+                    loop {
+                        let recv = tokio::time::timeout(idle_timeout, rx.recv()).await;
+                        match recv {
+                            Ok(Some(Ok(line))) => {
+                                if let Err(e) = session
+                                    .write_response_body(Some(Bytes::from(line.clone())), false)
+                                    .await
+                                {
+                                    if is_client_disconnect(&e) {
+                                        tracing::warn!(request_id = %ctx.request_id.as_str(), "client disconnected; aborting stream");
+                                        self.metrics.inc_client_disconnect();
+                                        client_gone = true;
+                                    } else {
+                                        return Err(e);
+                                    }
+                                    break;
                                 }
+                                chunks += 1;
+                                bytes_out += line.len();
+                            }
+                            Ok(Some(Err(e))) => {
+                                tracing::error!(request_id = %ctx.request_id.as_str(), error = %e, "stream error");
+                                self.metrics.inc_error();
+                                abort = true;
                                 break;
                             }
-                            chunks += 1;
-                            bytes_out += line.len();
-                        }
-                        Ok(Some(Err(e))) => {
-                            tracing::error!(request_id = %ctx.request_id.as_str(), error = %e, "stream error");
-                            self.metrics.inc_error();
-                            abort = true;
-                            break;
-                        }
-                        Ok(None) => break,
-                        Err(_) => {
-                            self.metrics.inc_upstream_timeout();
-                            tracing::error!(
-                                request_id = %ctx.request_id.as_str(),
-                                idle_secs = idle_timeout.as_secs(),
-                                "stream idle timeout; aborting"
-                            );
-                            abort = true;
-                            break;
+                            Ok(None) => break,
+                            Err(_) => {
+                                self.metrics.inc_upstream_timeout();
+                                tracing::error!(
+                                    request_id = %ctx.request_id.as_str(),
+                                    idle_secs = idle_timeout.as_secs(),
+                                    "stream idle timeout; aborting"
+                                );
+                                abort = true;
+                                break;
+                            }
                         }
                     }
                 }
@@ -317,7 +324,9 @@ impl ProxyHttp for CommandCodeProxy {
                 }
 
                 if !client_gone {
-                    session.write_response_body(None, true).await?;
+                    // Best-effort terminator write; a failure here must not
+                    // skip stream_finished() (active_streams would drift).
+                    let _ = session.write_response_body(None, true).await;
                 }
                 self.metrics.inc_chunks(chunks);
                 self.metrics.inc_bytes_out(bytes_out);
@@ -398,14 +407,14 @@ impl CommandCodeProxy {
 
     async fn handle_health(&self, session: &mut Session) -> PingoraResult<()> {
         let catalog = get_model_catalog();
-        let auth_health = self.auth.health_check().await;
 
+        // /health is intentionally unauthenticated (for monitors/scrapers), so
+        // it must NOT leak the auth directory path, auth method, credential
+        // validity, or the upstream URL. Only operational status is exposed.
         let response = serde_json::json!({
             "status": "ok",
-            "upstream": self.config.upstream_url,
             "models": catalog.len(),
             "default_model": self.config.default_model,
-            "auth": auth_health,
         });
 
         self.send_json(session, 200, &response).await

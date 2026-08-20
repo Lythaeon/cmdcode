@@ -908,15 +908,16 @@ async fn test_benchmark_through_proxy_vs_direct() {
 /// Start a real Pingora proxy instance pointing at `mock_addr`.
 /// Returns the proxy base URL (e.g. http://127.0.0.1:PORT).
 async fn start_proxy(mock_addr: SocketAddr, retries: u32, idle_timeout_secs: u64) -> String {
-    start_proxy_impl(mock_addr, retries, idle_timeout_secs, None).await
+    start_proxy_impl(mock_addr, retries, idle_timeout_secs, None, 0).await
 }
 
-/// Like `start_proxy` but optionally enforces an incoming bearer token.
+/// Like `start_proxy` but with an optional incoming token and concurrency cap.
 async fn start_proxy_impl(
     mock_addr: SocketAddr,
     retries: u32,
     idle_timeout_secs: u64,
     incoming_token: Option<&str>,
+    max_concurrent: usize,
 ) -> String {
     let auth_dir = std::env::temp_dir().join(format!(
         "cc-proxy-chaos-auth-{}-{}",
@@ -941,7 +942,7 @@ async fn start_proxy_impl(
         default_model: "xiaomi/mimo-v2.5".into(),
         upstream_timeout_secs: 30,
         max_retries: retries,
-        max_concurrent: 0,
+        max_concurrent: max_concurrent,
         cors_origin: None,
         model_allowlist: None,
         auth_dir: auth_dir.clone(),
@@ -1363,7 +1364,7 @@ async fn test_e2e_metrics_endpoint() {
 #[tokio::test]
 async fn test_e2e_incoming_auth_required() {
     let mock_addr = MockUpstream::normal().start().await;
-    let proxy = start_proxy_impl(mock_addr, 0, 180, Some("correct-horse")).await;
+    let proxy = start_proxy_impl(mock_addr, 0, 180, Some("correct-horse"), 0).await;
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -1534,4 +1535,62 @@ async fn test_concurrency_matrix() {
             "p99 latency too high: {p99:.1}ms at concurrency {conn}"
         );
     }
+}
+
+#[tokio::test]
+async fn test_max_concurrent_serializes_streams() {
+    // A slow streaming mock (one text delta, then a finish after a gap) so a
+    // held stream stays open long enough to observe serialization.
+    let mock = MockUpstream {
+        events: vec![
+            serde_json::json!({"type": "text-delta", "text": "one"}),
+            serde_json::json!({"type": "finish", "finishReason": "stop"}),
+        ],
+        chunk_gap_ms: 400,
+        ..MockUpstream::normal()
+    };
+    let mock_addr = mock.start().await;
+    // Concurrency cap of 1: only one stream may hold a permit at a time.
+    let proxy = start_proxy_impl(mock_addr, 0, 30, None, 1).await;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .unwrap();
+    let url = format!("{}/v1/chat/completions", proxy);
+
+    // Fire two streaming requests concurrently.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<f64>(2);
+    for _ in 0..2 {
+        let tx = tx.clone();
+        let client = client.clone();
+        let url = url.clone();
+        tokio::spawn(async move {
+            let start = std::time::Instant::now();
+            let _ = client
+                .post(&url)
+                .header("content-type", "application/json")
+                .header("authorization", "Bearer chaos-key-1234567890")
+                .body(CHAT_BODY)
+                .send()
+                .await;
+            let _ = tx.send(start.elapsed().as_secs_f64() * 1000.0).await;
+        });
+    }
+    drop(tx);
+
+    let mut finishes = Vec::new();
+    while let Some(t) = rx.recv().await {
+        finishes.push(t);
+    }
+    finishes.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    // With max_concurrent=1 the two streams MUST be serialized, so the second
+    // cannot finish before the first's stream duration + permit release.
+    assert_eq!(finishes.len(), 2, "expected both streams to complete");
+    assert!(
+        finishes[1] - finishes[0] >= 400.0,
+        "streams with max_concurrent=1 must be serialized (gap {}ms < 400ms)",
+        finishes[1] - finishes[0]
+    );
 }

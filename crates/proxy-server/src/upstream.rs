@@ -25,7 +25,7 @@ pub struct UpstreamClient {
     pub config: Arc<ProxyConfig>,
     pub auth: Arc<AuthManager>,
     pub metrics: Arc<Metrics>,
-    pub semaphore: Option<Semaphore>,
+    pub semaphore: Option<Arc<Semaphore>>,
 }
 
 impl UpstreamClient {
@@ -42,7 +42,7 @@ impl UpstreamClient {
             // 0 means unlimited — no concurrency cap.
             None
         } else {
-            Some(Semaphore::new(config.max_concurrent))
+            Some(Arc::new(Semaphore::new(config.max_concurrent)))
         };
 
         Self {
@@ -60,8 +60,8 @@ impl UpstreamClient {
         body: &ChatCompletionRequest,
         effort: Option<Effort>,
     ) -> Result<UpstreamResponse, UpstreamError> {
-        let _permit = if let Some(ref sem) = self.semaphore {
-            Some(sem.acquire().await.map_err(|e| {
+        let _permit = if let Some(sem) = self.semaphore.clone() {
+            Some(sem.acquire_owned().await.map_err(|e| {
                 UpstreamError::Io(std::io::Error::other(format!("semaphore closed: {e}")))
             })?)
         } else {
@@ -292,7 +292,14 @@ impl UpstreamClient {
                             // lifetime: it is released when this task exits
                             // (stream ends, errors, cancellation, or the client
                             // gives up), not when forward_request returns.
-                            let _ = _permit;
+                            //
+                            // NB: must bind to a NAMED variable. `let _ = x;`
+                            // would drop the permit immediately; forgetting the
+                            // binding entirely would drop it when
+                            // forward_request returns. The bound guard lives
+                            // until this async block ends, so the semaphore
+                            // actually bounds concurrent streams.
+                            let _permit_guard = _permit;
                             let _ = metrics;
                             let _ = cancel_inner;
                             let mut buffer = String::new();
@@ -320,6 +327,15 @@ impl UpstreamClient {
                                             None => done = true, // clean upstream EOF
                                             Some(Ok(b)) => {
                                                 buffer.push_str(&String::from_utf8_lossy(&b));
+                                                // Defense against an upstream that
+                                                // streams data with no newlines: cap
+                                                // the unconsumed buffer so a hostile
+                                                // or broken upstream cannot grow it
+                                                // without bound.
+                                                if buffer.len() - start > MAX_STREAM_BUFFER {
+                                                    metrics.inc_truncated_stream();
+                                                    return;
+                                                }
                                                 loop {
                                                     let rel = buffer[start..].find('\n');
                                                     match rel {
@@ -449,6 +465,10 @@ fn is_auth_rejected(status: u16) -> bool {
 /// upstream request; on a hot loopback this avoids a syscall-heavy `read_dir`
 /// each time. The TTL keeps the listing fresh enough to reflect new files.
 const STRUCTURE_CACHE_TTL_SECS: u64 = 5;
+
+/// Max unconsumed bytes buffered while waiting for a newline in a stream.
+/// Guards against an upstream that never sends `\n` (memory-exhaustion DoS).
+const MAX_STREAM_BUFFER: usize = 1024 * 1024;
 
 fn cached_structure(cwd: &str) -> Vec<String> {
     use std::sync::Mutex;
@@ -1118,7 +1138,7 @@ mod tests {
         let client = UpstreamClient::new(config, auth, metrics);
         let sem = client.semaphore.as_ref().expect("semaphore");
 
-        let permit = sem.acquire().await.unwrap();
+        let permit = sem.clone().acquire_owned().await.unwrap();
         assert_eq!(sem.available_permits(), 0);
         drop(permit);
         assert_eq!(sem.available_permits(), 1, "permit must return on drop");
