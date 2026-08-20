@@ -339,9 +339,7 @@ pub fn wire_messages(messages: &[OpenAiMessage]) -> Vec<CcMessage> {
                     match serde_json::from_value::<CcContentItem>(v) {
                         Ok(item) => cc_items.push(item),
                         Err(e) => {
-                            eprintln!(
-                                "[cmdcode] warning: failed to parse tool result: {e}"
-                            );
+                            eprintln!("[cmdcode] warning: failed to parse tool result: {e}");
                         }
                     }
                 }

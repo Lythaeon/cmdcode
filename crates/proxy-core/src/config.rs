@@ -54,23 +54,19 @@ impl ProxyConfig {
         let upstream_timeout_secs = env::var("COMMAND_CODE_PROXY_TIMEOUT")
             .unwrap_or_else(|_| "600".to_string())
             .parse()
-            .map_err(|e| ConfigError::InvalidTimeout(format!(
-                "COMMAND_CODE_PROXY_TIMEOUT: {e}"
-            )))?;
+            .map_err(|e| ConfigError::InvalidTimeout(format!("COMMAND_CODE_PROXY_TIMEOUT: {e}")))?;
 
         let max_retries = env::var("COMMAND_CODE_PROXY_RETRIES")
             .unwrap_or_else(|_| "2".to_string())
             .parse()
-            .map_err(|e| ConfigError::InvalidTimeout(format!(
-                "COMMAND_CODE_PROXY_RETRIES: {e}"
-            )))?;
+            .map_err(|e| ConfigError::InvalidTimeout(format!("COMMAND_CODE_PROXY_RETRIES: {e}")))?;
 
         let max_concurrent = env::var("COMMAND_CODE_PROXY_MAX_REQS")
             .unwrap_or_else(|_| "0".to_string())
             .parse()
-            .map_err(|e| ConfigError::InvalidTimeout(format!(
-                "COMMAND_CODE_PROXY_MAX_REQS: {e}"
-            )))?;
+            .map_err(|e| {
+                ConfigError::InvalidTimeout(format!("COMMAND_CODE_PROXY_MAX_REQS: {e}"))
+            })?;
 
         let cors_origin = env::var("COMMAND_CODE_PROXY_CORS").ok();
 

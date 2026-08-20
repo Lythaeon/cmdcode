@@ -23,10 +23,14 @@ traffic from the official `cmd` CLI.
 ## Quick start
 
 ```bash
-# Prerequisites: Rust 1.75+, command-code CLI authenticated
+# Install from crates.io (requires Rust 1.75+)
+cargo install cmdcode
 
+# Or build from source
 git clone https://github.com/Lythaeon/cmdcode.git
 cd cmdcode
+cargo install --path crates/proxy-cli
+```
 
 # Run
 cargo run --release

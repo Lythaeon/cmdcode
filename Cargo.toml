@@ -5,6 +5,7 @@ members = [
     "crates/proxy-server",
     "crates/proxy-cli",
 ]
+exclude = ["crates/proxy-core/fuzz"]
 
 [workspace.package]
 name = "cmdcode"

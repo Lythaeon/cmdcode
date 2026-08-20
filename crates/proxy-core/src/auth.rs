@@ -113,7 +113,6 @@ impl AuthManager {
         *state = None;
     }
 
-
     async fn refresh(&self) -> Result<(), AuthError> {
         let auth_file = self.auth_dir.join("auth.json");
         if !auth_file.exists() {

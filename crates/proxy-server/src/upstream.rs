@@ -287,9 +287,11 @@ impl UpstreamClient {
                                 finish_reason,
                                 &usage,
                             ))
-                            .map_err(|e| UpstreamError::HttpError {
-                                status: 502,
-                                body: format!("response serialization: {e}"),
+                            .map_err(|e| {
+                                UpstreamError::HttpError {
+                                    status: 502,
+                                    body: format!("response serialization: {e}"),
+                                }
                             })?,
                         ));
                     } else {
@@ -400,7 +402,8 @@ impl UpstreamClient {
                             }
 
                             // Clean EOF: flush any residual unterminated record.
-                            let residual = String::from_utf8_lossy(&buffer[start..]).trim().to_string();
+                            let residual =
+                                String::from_utf8_lossy(&buffer[start..]).trim().to_string();
                             if residual.is_empty() {
                                 let _ = tx.send(Ok("data: [DONE]\n\n".to_string())).await;
                             } else {
