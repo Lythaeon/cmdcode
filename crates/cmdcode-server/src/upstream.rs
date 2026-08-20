@@ -1,8 +1,8 @@
-use proxy_core::auth::AuthManager;
-use proxy_core::config::ProxyConfig;
-use proxy_core::error::UpstreamError;
-use proxy_core::types::{Effort, FinishReason, ModelId};
-use proxy_core::wire_format::{
+use cmdcode_core::auth::AuthManager;
+use cmdcode_core::config::ProxyConfig;
+use cmdcode_core::error::UpstreamError;
+use cmdcode_core::types::{Effort, FinishReason, ModelId};
+use cmdcode_core::wire_format::{
     build_completion, wire_messages, wire_tools, CcUsage, ChatCompletionRequest, UpstreamEvent,
 };
 use std::sync::Arc;
@@ -739,7 +739,7 @@ fn chrono_now_secs() -> i64 {
         .as_secs() as i64
 }
 
-fn extract_system(messages: &[proxy_core::wire_format::OpenAiMessage]) -> Option<String> {
+fn extract_system(messages: &[cmdcode_core::wire_format::OpenAiMessage]) -> Option<String> {
     for msg in messages {
         if msg.role == "system" {
             return Some(match &msg.content {
@@ -991,7 +991,7 @@ mod tests {
     }
 
     /// Randomized soak test over `translate_line`. Ignored by default; run with
-    /// `cargo test -p proxy-server -- --ignored fuzz` (or set FUZZ_SECONDS to
+    /// `cargo test -p cmdcode-server -- --ignored fuzz` (or set FUZZ_SECONDS to
     /// bound the run, default 300s). Asserts translate_line never panics and
     /// that every emitted payload is valid SSE carrying a JSON chunk.
     #[test]
@@ -1089,8 +1089,8 @@ mod tests {
         assert!(iterations > 0);
     }
 
-    fn test_config(max_concurrent: usize) -> proxy_core::config::ProxyConfig {
-        proxy_core::config::ProxyConfig {
+    fn test_config(max_concurrent: usize) -> cmdcode_core::config::ProxyConfig {
+        cmdcode_core::config::ProxyConfig {
             listen_addr: "127.0.0.1:18080".into(),
             upstream_url: "https://api.commandcode.ai".into(),
             default_model: "xiaomi/mimo-v2.5".into(),
@@ -1116,7 +1116,7 @@ mod tests {
     #[test]
     fn test_semaphore_zero_means_unlimited() {
         let config = Arc::new(test_config(0));
-        let auth = Arc::new(proxy_core::auth::AuthManager::new(
+        let auth = Arc::new(cmdcode_core::auth::AuthManager::new(
             std::path::PathBuf::from("/tmp/none"),
             30,
         ));
@@ -1131,7 +1131,7 @@ mod tests {
     #[test]
     fn test_semaphore_n_permits_for_n() {
         let config = Arc::new(test_config(5));
-        let auth = Arc::new(proxy_core::auth::AuthManager::new(
+        let auth = Arc::new(cmdcode_core::auth::AuthManager::new(
             std::path::PathBuf::from("/tmp/none"),
             30,
         ));
@@ -1151,7 +1151,7 @@ mod tests {
     #[tokio::test]
     async fn test_semaphore_permit_released_on_scope_end() {
         let config = Arc::new(test_config(1));
-        let auth = Arc::new(proxy_core::auth::AuthManager::new(
+        let auth = Arc::new(cmdcode_core::auth::AuthManager::new(
             std::path::PathBuf::from("/tmp/none"),
             30,
         ));

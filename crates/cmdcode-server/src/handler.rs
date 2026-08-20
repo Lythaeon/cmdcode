@@ -7,11 +7,11 @@ use pingora_proxy::{ProxyHttp, Session};
 use std::sync::Arc;
 use std::time::Instant;
 
-use proxy_core::auth::AuthManager;
-use proxy_core::config::ProxyConfig;
-use proxy_core::model_catalog::get_model_catalog;
-use proxy_core::types::RequestId;
-use proxy_core::wire_format::ChatCompletionRequest;
+use cmdcode_core::auth::AuthManager;
+use cmdcode_core::config::ProxyConfig;
+use cmdcode_core::model_catalog::get_model_catalog;
+use cmdcode_core::types::RequestId;
+use cmdcode_core::wire_format::ChatCompletionRequest;
 
 use crate::metrics::Metrics;
 use crate::upstream::{self, UpstreamClient};
@@ -200,7 +200,7 @@ impl ProxyHttp for CommandCodeProxy {
 
         // Validate model
         let model_id_str = body.model.as_deref().unwrap_or(&self.config.default_model);
-        let (model, effort) = proxy_core::types::parse_model_and_effort(model_id_str);
+        let (model, effort) = cmdcode_core::types::parse_model_and_effort(model_id_str);
         let model = model.strip_prefix();
 
         if let Some(ref allowlist) = self.config.model_allowlist {
@@ -342,15 +342,15 @@ impl ProxyHttp for CommandCodeProxy {
             }
             Err(e) => {
                 self.metrics.inc_error();
-                if matches!(e, proxy_core::error::UpstreamError::Timeout { .. }) {
+                if matches!(e, cmdcode_core::error::UpstreamError::Timeout { .. }) {
                     self.metrics.inc_upstream_timeout();
                 }
                 tracing::error!(error = %e, "upstream error");
                 let status = match &e {
-                    proxy_core::error::UpstreamError::ConnectionRefused { .. } => 502,
-                    proxy_core::error::UpstreamError::ConnectionReset => 502,
-                    proxy_core::error::UpstreamError::Timeout { .. } => 504,
-                    proxy_core::error::UpstreamError::HttpError { status, .. } => *status,
+                    cmdcode_core::error::UpstreamError::ConnectionRefused { .. } => 502,
+                    cmdcode_core::error::UpstreamError::ConnectionReset => 502,
+                    cmdcode_core::error::UpstreamError::Timeout { .. } => 504,
+                    cmdcode_core::error::UpstreamError::HttpError { status, .. } => *status,
                     _ => 502,
                 };
                 let err = serde_json::json!({

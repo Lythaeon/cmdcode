@@ -1,5 +1,5 @@
 [package]
-name = "proxy-server"
+name = "cmdcode-server"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
@@ -12,7 +12,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-proxy-core.workspace = true
+cmdcode-core.workspace = true
 pingora-core.workspace = true
 pingora-proxy.workspace = true
 pingora-http.workspace = true

@@ -3,9 +3,9 @@ pub mod logging;
 pub mod metrics;
 pub mod upstream;
 
+use cmdcode_core::auth::AuthManager;
+use cmdcode_core::config::ProxyConfig;
 use pingora_core::server::Server;
-use proxy_core::auth::AuthManager;
-use proxy_core::config::ProxyConfig;
 use std::sync::Arc;
 
 use crate::metrics::Metrics;

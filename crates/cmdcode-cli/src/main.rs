@@ -1,7 +1,7 @@
-use proxy_core::auth::AuthManager;
-use proxy_core::config::ProxyConfig;
-use proxy_server::logging::RotatingLog;
-use proxy_server::ProxyService;
+use cmdcode_core::auth::AuthManager;
+use cmdcode_core::config::ProxyConfig;
+use cmdcode_server::logging::RotatingLog;
+use cmdcode_server::ProxyService;
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config = ProxyConfig::from_env()?;

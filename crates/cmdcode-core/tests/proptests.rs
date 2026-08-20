@@ -1,18 +1,18 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-//! Property-based tests for proxy-core translation logic.
+//! Property-based tests for cmdcode-core translation logic.
 //!
 //! These verify invariants that hold for arbitrary inputs — the proxy must
 //! never panic on malformed or adversarial data, and the wire translation
 //! must preserve the structural guarantees callers rely on.
 
-use proptest::prelude::*;
-use proxy_core::types::{Effort, FinishReason};
-use proxy_core::wire_format::UpstreamEvent;
-use proxy_core::wire_format::{
+use cmdcode_core::types::{Effort, FinishReason};
+use cmdcode_core::wire_format::UpstreamEvent;
+use cmdcode_core::wire_format::{
     build_completion, wire_messages, CcUsage, FinishReason as WireFinishReason, OpenAiMessage,
     OpenAiTool,
 };
+use proptest::prelude::*;
 
 /// Arbitrary roles, including hostile ones the upstream might never send.
 fn any_role() -> impl Strategy<Value = String> {
@@ -91,19 +91,19 @@ proptest! {
         // The wire output must never contain a System message.
         for w in &wire {
             assert!(
-                !matches!(w, proxy_core::wire_format::CcMessage::System { .. }),
+                !matches!(w, cmdcode_core::wire_format::CcMessage::System { .. }),
                 "wire output must never contain a System message"
             );
         }
         for w in &wire {
             let backed = messages.iter().any(|msg| match w {
-                proxy_core::wire_format::CcMessage::User { .. } => {
+                cmdcode_core::wire_format::CcMessage::User { .. } => {
                     matches!(msg.role.as_str(), "user" | "tool" | "assistant")
                         || !matches!(msg.role.as_str(), "system")
                 }
-                proxy_core::wire_format::CcMessage::Assistant { .. } => msg.role == "assistant",
-                proxy_core::wire_format::CcMessage::Tool { .. } => msg.role == "tool",
-                proxy_core::wire_format::CcMessage::System { .. } => false,
+                cmdcode_core::wire_format::CcMessage::Assistant { .. } => msg.role == "assistant",
+                cmdcode_core::wire_format::CcMessage::Tool { .. } => msg.role == "tool",
+                cmdcode_core::wire_format::CcMessage::System { .. } => false,
             });
             assert!(backed, "wire message has no matching source message");
         }
@@ -112,7 +112,7 @@ proptest! {
     /// wire_tools must never panic and must preserve function names.
     #[test]
     fn prop_wire_tools_never_panics(tools in proptest::collection::vec(any_tool(), 0..16)) {
-        let wire = proxy_core::wire_format::wire_tools(&tools);
+        let wire = cmdcode_core::wire_format::wire_tools(&tools);
         for (i, tool) in tools.iter().enumerate() {
             let name = tool
                 .name
@@ -191,7 +191,7 @@ proptest! {
     /// parse_model_and_effort never panics on arbitrary model strings.
     #[test]
     fn prop_parse_model_never_panics(model_str in ".*") {
-        let _ = proxy_core::types::parse_model_and_effort(&model_str);
+        let _ = cmdcode_core::types::parse_model_and_effort(&model_str);
     }
 
     /// Effort strings round-trip through parse: "model:effort" parses to the
@@ -203,7 +203,7 @@ proptest! {
         ];
         let e = efforts[effort];
         let raw = format!("{model}:{e}");
-        let (m, parsed) = proxy_core::types::parse_model_and_effort(&raw);
+        let (m, parsed) = cmdcode_core::types::parse_model_and_effort(&raw);
         assert_eq!(m.as_str(), model);
         assert_eq!(
             parsed.map(|p| p.as_str()),

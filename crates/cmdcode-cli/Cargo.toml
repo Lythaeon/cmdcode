@@ -1,5 +1,5 @@
 [package]
-name = "proxy-core"
+name = "cmdcode-cli"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
@@ -11,18 +11,16 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[[bin]]
+name = "cmdcode"
+path = "src/main.rs"
+
 [dependencies]
-thiserror.workspace = true
-serde.workspace = true
-serde_json.workspace = true
+cmdcode-core.workspace = true
+cmdcode-server.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-uuid = { version = "1", features = ["v4"] }
-dirs = "5"
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-tempfile = "3"
-proptest = "1"

@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use proxy_core::wire_format;
+use cmdcode_core::wire_format;
 
 fuzz_target!(|data: &[u8]| {
     // Fuzz message wire format conversion
@@ -28,6 +28,6 @@ fuzz_target!(|data: &[u8]| {
 
     // Fuzz model and effort parsing
     if let Ok(text) = std::str::from_utf8(data) {
-        let _ = proxy_core::types::parse_model_and_effort(text);
+        let _ = cmdcode_core::types::parse_model_and_effort(text);
     }
 });

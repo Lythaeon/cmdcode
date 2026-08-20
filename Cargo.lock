@@ -360,6 +360,62 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmdcode-cli"
+version = "0.1.0"
+dependencies = [
+ "cmdcode-core",
+ "cmdcode-server",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "cmdcode-core"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "proptest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "cmdcode-server"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "cmdcode-core",
+ "futures",
+ "http",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "pingora-core",
+ "pingora-error",
+ "pingora-http",
+ "pingora-proxy",
+ "rand 0.8.7",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1783,62 +1839,6 @@ name = "protobuf"
 version = "2.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "106dd99e98437432fed6519dedecfade6a06a73bb7b2a1e019fdd2bee5778d94"
-
-[[package]]
-name = "proxy-cli"
-version = "0.1.0"
-dependencies = [
- "proxy-core",
- "proxy-server",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "proxy-core"
-version = "0.1.0"
-dependencies = [
- "dirs",
- "proptest",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "proxy-server"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "bytes",
- "futures",
- "http",
- "http-body",
- "http-body-util",
- "hyper",
- "hyper-util",
- "pingora-core",
- "pingora-error",
- "pingora-http",
- "pingora-proxy",
- "proxy-core",
- "rand 0.8.7",
- "reqwest",
- "serde",
- "serde_json",
- "time",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
-]
 
 [[package]]
 name = "quick-error"

@@ -52,7 +52,7 @@ jobs:
         run: |
           set -euo pipefail
           tag_version="${GITHUB_REF_NAME#v}"
-          package_version="$(cargo pkgid -p proxy-cli | sed -E 's/.*#([^#]+)$/\1/')"
+          package_version="$(cargo pkgid -p cmdcode-cli | sed -E 's/.*#([^#]+)$/\1/')"
           if [[ "${tag_version}" != "${package_version}" ]]; then
             echo "Release tag ${GITHUB_REF_NAME} does not match Cargo package version ${package_version}" >&2
             exit 1
@@ -95,7 +95,7 @@ jobs:
           fi
 
           # Publish internal crates first (dependency order), then the CLI
-          for crate in proxy-core proxy-server proxy-cli; do
+          for crate in cmdcode-core cmdcode-server cmdcode-cli; do
             version="$(cargo pkgid -p "${crate}" | sed -E 's/.*#//; s/.*@//')"
             echo "Publishing ${crate} ${version}..."
             if ! cargo publish --locked -p "${crate}"; then

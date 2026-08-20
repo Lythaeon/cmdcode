@@ -264,15 +264,17 @@ async fn test_e2e_models_endpoint() {
     )
     .ok();
 
-    let auth =
-        proxy_core::auth::AuthManager::new(std::path::PathBuf::from("/tmp/test/.commandcode"), 30);
+    let auth = cmdcode_core::auth::AuthManager::new(
+        std::path::PathBuf::from("/tmp/test/.commandcode"),
+        30,
+    );
 
     // Catalog may be empty in test env if CLI isn't installed — that's OK
-    let _catalog = proxy_core::model_catalog::get_model_catalog();
+    let _catalog = cmdcode_core::model_catalog::get_model_catalog();
 
     let method = auth.get_auth_method().await.unwrap();
     match method {
-        proxy_core::auth::AuthMethod::ApiKey(k) => assert_eq!(k, "test-key"),
+        cmdcode_core::auth::AuthMethod::ApiKey(k) => assert_eq!(k, "test-key"),
         _ => panic!("expected API key"),
     }
 
@@ -285,13 +287,13 @@ async fn test_e2e_models_endpoint() {
 #[tokio::test]
 async fn test_e2e_wire_format_translation() {
     let messages = vec![
-        proxy_core::wire_format::OpenAiMessage {
+        cmdcode_core::wire_format::OpenAiMessage {
             role: "system".into(),
             content: Some(serde_json::json!("Be helpful")),
             tool_call_id: None,
             tool_calls: None,
         },
-        proxy_core::wire_format::OpenAiMessage {
+        cmdcode_core::wire_format::OpenAiMessage {
             role: "user".into(),
             content: Some(serde_json::json!("Hello")),
             tool_call_id: None,
@@ -299,15 +301,15 @@ async fn test_e2e_wire_format_translation() {
         },
     ];
 
-    let wire = proxy_core::wire_format::wire_messages(&messages);
+    let wire = cmdcode_core::wire_format::wire_messages(&messages);
     // System messages are skipped in the array (they go to params.system)
     assert_eq!(wire.len(), 1);
 
     match &wire[0] {
-        proxy_core::wire_format::CcMessage::User { content } => {
+        cmdcode_core::wire_format::CcMessage::User { content } => {
             assert_eq!(content.len(), 1);
             match &content[0] {
-                proxy_core::wire_format::CcContentItem::Text { text } => {
+                cmdcode_core::wire_format::CcContentItem::Text { text } => {
                     assert_eq!(text, "Hello");
                 }
                 _ => panic!("expected text"),
@@ -319,9 +321,9 @@ async fn test_e2e_wire_format_translation() {
 
 #[tokio::test]
 async fn test_e2e_tool_translation() {
-    let tools = vec![proxy_core::wire_format::OpenAiTool {
+    let tools = vec![cmdcode_core::wire_format::OpenAiTool {
         tool_type: "function".into(),
-        function: Some(proxy_core::wire_format::OpenAiFunction {
+        function: Some(cmdcode_core::wire_format::OpenAiFunction {
             name: "search".into(),
             description: Some("Search the web".into()),
             parameters: Some(serde_json::json!({
@@ -335,7 +337,7 @@ async fn test_e2e_tool_translation() {
         parameters: None,
     }];
 
-    let wire = proxy_core::wire_format::wire_tools(&tools);
+    let wire = cmdcode_core::wire_format::wire_tools(&tools);
     assert_eq!(wire.len(), 1);
     assert_eq!(wire[0].name, "search");
     assert_eq!(wire[0].description, "Search the web");
@@ -343,18 +345,18 @@ async fn test_e2e_tool_translation() {
 
 #[tokio::test]
 async fn test_e2e_reasoning_effort_parsing() {
-    let (model, effort) = proxy_core::types::parse_model_and_effort("claude-sonnet-5:high");
+    let (model, effort) = cmdcode_core::types::parse_model_and_effort("claude-sonnet-5:high");
     assert_eq!(model.as_str(), "claude-sonnet-5");
-    assert_eq!(effort, Some(proxy_core::types::Effort::High));
+    assert_eq!(effort, Some(cmdcode_core::types::Effort::High));
 
-    let (model, effort) = proxy_core::types::parse_model_and_effort("gpt-5.6-luna");
+    let (model, effort) = cmdcode_core::types::parse_model_and_effort("gpt-5.6-luna");
     assert_eq!(model.as_str(), "gpt-5.6-luna");
     assert_eq!(effort, None);
 
     let (model, effort) =
-        proxy_core::types::parse_model_and_effort("command-code/xiaomi/mimo-v2.5:max");
+        cmdcode_core::types::parse_model_and_effort("command-code/xiaomi/mimo-v2.5:max");
     assert_eq!(model.as_str(), "xiaomi/mimo-v2.5");
-    assert_eq!(effort, Some(proxy_core::types::Effort::Max));
+    assert_eq!(effort, Some(cmdcode_core::types::Effort::Max));
 }
 
 // ============================================================
@@ -600,28 +602,28 @@ async fn test_concurrent_mixed_methods() {
 
 #[test]
 fn test_model_catalog_loads() {
-    let catalog = proxy_core::model_catalog::get_model_catalog();
+    let catalog = cmdcode_core::model_catalog::get_model_catalog();
     // In test env, catalog may be empty if CLI isn't installed
-    // The parsing logic is tested separately in proxy-core unit tests
+    // The parsing logic is tested separately in cmdcode-core unit tests
     assert!(catalog.len() <= 100, "Catalog too large: {}", catalog.len());
 }
 
 #[test]
 fn test_model_catalog_efforts() {
-    let catalog = proxy_core::model_catalog::get_model_catalog();
+    let catalog = cmdcode_core::model_catalog::get_model_catalog();
     if catalog.is_empty() {
         return; // Skip if CLI not installed in test env
     }
 
-    let claude = catalog.get(&proxy_core::types::ModelId::new("claude-sonnet-5"));
+    let claude = catalog.get(&cmdcode_core::types::ModelId::new("claude-sonnet-5"));
     if let Some(claude) = claude {
         assert!(claude.reasoning);
         assert_eq!(claude.efforts.len(), 5);
-        assert!(claude.efforts.contains(&proxy_core::types::Effort::High));
-        assert!(claude.efforts.contains(&proxy_core::types::Effort::Max));
+        assert!(claude.efforts.contains(&cmdcode_core::types::Effort::High));
+        assert!(claude.efforts.contains(&cmdcode_core::types::Effort::Max));
     }
 
-    let gpt = catalog.get(&proxy_core::types::ModelId::new("gpt-5.6-luna"));
+    let gpt = catalog.get(&cmdcode_core::types::ModelId::new("gpt-5.6-luna"));
     if let Some(gpt) = gpt {
         assert!(gpt.reasoning);
         assert!(gpt.context_window.as_u64() > 0);
@@ -630,7 +632,7 @@ fn test_model_catalog_efforts() {
 
 #[test]
 fn test_model_catalog_providers() {
-    let catalog = proxy_core::model_catalog::get_model_catalog();
+    let catalog = cmdcode_core::model_catalog::get_model_catalog();
     if catalog.is_empty() {
         return; // Skip if CLI not installed in test env
     }
@@ -641,7 +643,7 @@ fn test_model_catalog_providers() {
 
 #[test]
 fn test_config_from_env() {
-    let config = proxy_core::config::ProxyConfig::from_env().unwrap();
+    let config = cmdcode_core::config::ProxyConfig::from_env().unwrap();
     assert_eq!(config.listen_addr, "127.0.0.1:18080");
     assert_eq!(config.upstream_url, "https://api.commandcode.ai");
     assert_eq!(config.default_model, "xiaomi/mimo-v2.5");
@@ -652,7 +654,7 @@ fn test_config_from_env() {
 #[test]
 fn test_auth_data_parsing() {
     let json = r#"{"apiKey":"my-key","userId":"123","userName":"test"}"#;
-    let auth: proxy_core::auth::AuthData = serde_json::from_str(json).unwrap();
+    let auth: cmdcode_core::auth::AuthData = serde_json::from_str(json).unwrap();
     assert_eq!(auth.api_key.as_deref(), Some("my-key"));
     assert_eq!(auth.user_id.as_deref(), Some("123"));
 }
@@ -660,7 +662,7 @@ fn test_auth_data_parsing() {
 #[test]
 fn test_auth_data_oauth() {
     let json = r#"{"oauthToken":"token123","oauthProvider":"github"}"#;
-    let auth: proxy_core::auth::AuthData = serde_json::from_str(json).unwrap();
+    let auth: cmdcode_core::auth::AuthData = serde_json::from_str(json).unwrap();
     assert_eq!(auth.oauth_token.as_deref(), Some("token123"));
     assert_eq!(auth.oauth_provider.as_deref(), Some("github"));
     assert!(auth.api_key.is_none());
@@ -668,22 +670,22 @@ fn test_auth_data_oauth() {
 
 #[test]
 fn test_error_types() {
-    let err = proxy_core::error::ProxyError::ModelNotAllowed("test".into());
+    let err = cmdcode_core::error::ProxyError::ModelNotAllowed("test".into());
     assert!(err.to_string().contains("test"));
 
-    let err = proxy_core::error::UpstreamError::ConnectionRefused {
+    let err = cmdcode_core::error::UpstreamError::ConnectionRefused {
         host: "localhost".into(),
         port: 8080,
     };
     assert!(err.to_string().contains("localhost"));
 
-    let err = proxy_core::error::AuthError::NoAuthConfigured;
+    let err = cmdcode_core::error::AuthError::NoAuthConfigured;
     assert!(!err.to_string().is_empty());
 }
 
 #[test]
 fn test_finish_reason_mapping() {
-    use proxy_core::types::FinishReason;
+    use cmdcode_core::types::FinishReason;
     assert_eq!(FinishReason::from_upstream("stop"), FinishReason::Stop);
     assert_eq!(
         FinishReason::from_upstream("tool_use"),
@@ -703,16 +705,16 @@ fn test_finish_reason_mapping() {
 
 #[test]
 fn test_request_id_generation() {
-    let id1 = proxy_core::types::RequestId::generate();
-    let id2 = proxy_core::types::RequestId::generate();
+    let id1 = cmdcode_core::types::RequestId::generate();
+    let id2 = cmdcode_core::types::RequestId::generate();
     assert_ne!(id1.as_str(), id2.as_str());
     assert!(!id1.as_str().is_empty());
 }
 
 #[test]
 fn test_session_id_generation() {
-    let id1 = proxy_core::types::SessionId::generate();
-    let id2 = proxy_core::types::SessionId::generate();
+    let id1 = cmdcode_core::types::SessionId::generate();
+    let id2 = cmdcode_core::types::SessionId::generate();
     assert_ne!(id1.as_str(), id2.as_str());
 }
 
@@ -748,7 +750,7 @@ async fn test_benchmark_through_proxy_vs_direct() {
     let proxy_port = probe.local_addr().unwrap().port();
     drop(probe);
 
-    let config = proxy_core::config::ProxyConfig {
+    let config = cmdcode_core::config::ProxyConfig {
         listen_addr: format!("127.0.0.1:{}", proxy_port),
         upstream_url: format!("http://{}", mock_addr),
         default_model: "xiaomi/mimo-v2.5".into(),
@@ -769,11 +771,11 @@ async fn test_benchmark_through_proxy_vs_direct() {
         tls_key: None,
         incoming_token: None,
     };
-    let auth = proxy_core::auth::AuthManager::new(auth_dir.clone(), 60);
+    let auth = cmdcode_core::auth::AuthManager::new(auth_dir.clone(), 60);
 
     // Run the REAL Pingora proxy in a background thread.
     std::thread::spawn(move || {
-        let service = proxy_server::ProxyService::new(config, auth);
+        let service = cmdcode_server::ProxyService::new(config, auth);
         let _ = service.run();
     });
 
@@ -938,7 +940,7 @@ async fn start_proxy_impl(
     let proxy_port = probe.local_addr().unwrap().port();
     drop(probe);
 
-    let config = proxy_core::config::ProxyConfig {
+    let config = cmdcode_core::config::ProxyConfig {
         listen_addr: format!("127.0.0.1:{}", proxy_port),
         upstream_url: format!("http://{}", mock_addr),
         default_model: "xiaomi/mimo-v2.5".into(),
@@ -959,10 +961,10 @@ async fn start_proxy_impl(
         tls_key: None,
         incoming_token: incoming_token.map(|t| t.to_string()),
     };
-    let auth = proxy_core::auth::AuthManager::new(auth_dir, 60);
+    let auth = cmdcode_core::auth::AuthManager::new(auth_dir, 60);
 
     std::thread::spawn(move || {
-        let service = proxy_server::ProxyService::new(config, auth);
+        let service = cmdcode_server::ProxyService::new(config, auth);
         let _ = service.run();
     });
 
