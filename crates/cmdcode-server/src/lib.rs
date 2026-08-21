@@ -77,21 +77,16 @@ impl ProxyService {
             metrics.clone(),
         ));
 
-        let rate_limit_backend = match self.config.rate_limit_backend.as_str() {
-            "redis" => RateLimitBackend::Redis {
-                url: self
-                    .config
-                    .rate_limit_redis_url
-                    .clone()
-                    .unwrap_or_else(|| "redis://127.0.0.1:6379".to_string()),
-            },
-            _ => RateLimitBackend::Local,
+        let rate_limit_backend = match self.config.rate_limit_backend {
+            RateLimitBackend::Redis => RateLimitBackend::Redis,
+            RateLimitBackend::Local => RateLimitBackend::Local,
         };
 
         let rate_limiter = Arc::new(RateLimiter::new(RateLimitConfig {
             max_requests: self.config.rate_limit_max_requests,
             window_secs: self.config.rate_limit_window_secs,
             backend: rate_limit_backend,
+            redis_url: self.config.rate_limit_redis_url.clone(),
         }));
 
         tracing::info!(
@@ -217,7 +212,7 @@ mod tests {
             incoming_token: None,
             rate_limit_max_requests: 100,
             rate_limit_window_secs: 60,
-            rate_limit_backend: "local".into(),
+            rate_limit_backend: cmdcode_core::types::RateLimitBackend::Local,
             rate_limit_redis_url: None,
         };
         let auth = AuthManager::new(config.auth_dir.clone(), 30);

@@ -1,4 +1,5 @@
 use crate::error::ConfigError;
+use crate::types::RateLimitBackend;
 use std::collections::HashSet;
 use std::env;
 use std::path::PathBuf;
@@ -48,8 +49,8 @@ pub struct ProxyConfig {
     pub rate_limit_max_requests: u64,
     /// Rate limit: window duration in seconds.
     pub rate_limit_window_secs: u64,
-    /// Rate limit: backend type ("local" or "redis").
-    pub rate_limit_backend: String,
+    /// Rate limit: backend type (local or redis).
+    pub rate_limit_backend: RateLimitBackend,
     /// Rate limit: Redis URL (only used if backend is "redis").
     pub rate_limit_redis_url: Option<String>,
 }
@@ -175,7 +176,9 @@ impl ProxyConfig {
             .unwrap_or(60);
 
         let rate_limit_backend = env::var("COMMAND_CODE_PROXY_RATE_LIMIT_BACKEND")
-            .unwrap_or_else(|_| "local".to_string());
+            .ok()
+            .and_then(|s| RateLimitBackend::from_str_opt(&s))
+            .unwrap_or(RateLimitBackend::Local);
 
         let rate_limit_redis_url = env::var("COMMAND_CODE_PROXY_RATE_LIMIT_REDIS_URL").ok();
 

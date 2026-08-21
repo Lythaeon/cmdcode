@@ -33,6 +33,7 @@ pingora-proxy = "0.8"
 pingora-http = "0.8"
 pingora-error = "0.8"
 clap = { version = "4", features = ["derive"] }
+zeroize = { version = "1", features = ["derive"] }
 
 [profile.release]
 opt-level = 3

@@ -1,5 +1,5 @@
 use crate::error::AuthError;
-use crate::types::SessionId;
+use crate::types::{CliEnvironment, SensitiveString, SessionId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -12,10 +12,10 @@ use tokio::sync::RwLock;
 pub struct AuthData {
     /// API key for upstream authentication.
     #[serde(default, alias = "apiKey")]
-    pub api_key: Option<String>,
+    pub api_key: Option<SensitiveString>,
     /// OAuth token for upstream authentication.
     #[serde(default, alias = "oauthToken")]
-    pub oauth_token: Option<String>,
+    pub oauth_token: Option<SensitiveString>,
     /// OAuth provider name.
     #[serde(default, alias = "oauthProvider")]
     pub oauth_provider: Option<String>,
@@ -45,11 +45,11 @@ pub struct ConfigData {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthMethod {
     /// API key authentication.
-    ApiKey(String),
+    ApiKey(SensitiveString),
     /// OAuth token authentication.
     OAuth {
         /// OAuth access token.
-        token: String,
+        token: SensitiveString,
         /// OAuth provider name.
         provider: String,
     },
@@ -203,13 +203,15 @@ impl AuthManager {
         headers.insert("Content-Type".into(), "application/json".into());
         headers.insert("User-Agent".into(), "cli".into());
         headers.insert("x-command-code-version".into(), "1.0.0".into());
-        // F-8: Sanitize env var value to prevent header injection via CRLF.
-        let cli_env = std::env::var("COMMAND_CODE_ENV")
+        // Sanitize env var value to prevent header injection via CRLF.
+        let cli_env_str = std::env::var("COMMAND_CODE_ENV")
             .unwrap_or_else(|_| "production".into())
             .chars()
             .filter(|c| *c != '\r' && *c != '\n')
             .collect::<String>();
-        headers.insert("x-cli-environment".into(), cli_env);
+        let cli_env = CliEnvironment::from_str_opt(&cli_env_str)
+            .unwrap_or(CliEnvironment::Production);
+        headers.insert("x-cli-environment".into(), cli_env.as_str().into());
         headers.insert("x-project-slug".into(), project_slug.into());
         headers.insert(
             "x-taste-learning".into(),
@@ -223,10 +225,10 @@ impl AuthManager {
 
         match method {
             AuthMethod::ApiKey(key) => {
-                headers.insert("Authorization".into(), format!("Bearer {}", key));
+                headers.insert("Authorization".into(), format!("Bearer {}", key.as_str()));
             }
             AuthMethod::OAuth { token, provider } => {
-                headers.insert("x-oauth-token".into(), format!("Bearer {}", token));
+                headers.insert("x-oauth-token".into(), format!("Bearer {}", token.as_str()));
                 if !provider.is_empty() {
                     headers.insert("x-oauth-provider".into(), provider);
                 }
@@ -257,7 +259,7 @@ mod tests {
         let mgr = AuthManager::new(auth_dir, 30);
         let method = mgr.get_auth_method().await.unwrap();
         match method {
-            AuthMethod::ApiKey(k) => assert_eq!(k, "test-key-12345678"),
+            AuthMethod::ApiKey(k) => assert_eq!(k.as_str(), "test-key-12345678"),
             _ => panic!("expected API key"),
         }
     }
@@ -300,7 +302,7 @@ mod tests {
 
         let method = mgr.get_auth_method().await.unwrap();
         match method {
-            AuthMethod::ApiKey(k) => assert_eq!(k, "key1"), // cached
+            AuthMethod::ApiKey(k) => assert_eq!(k.as_str(), "key1"), // cached
             _ => panic!("expected cached key"),
         }
     }
@@ -382,7 +384,7 @@ mod tests {
         let method = mgr.get_auth_method().await.unwrap();
         match method {
             AuthMethod::OAuth { token, provider } => {
-                assert_eq!(token, "tok123");
+                assert_eq!(token.as_str(), "tok123");
                 assert_eq!(provider, "github");
             }
             _ => panic!("expected OAuth"),
@@ -400,7 +402,7 @@ mod tests {
         let method = mgr.get_auth_method().await.unwrap();
         match method {
             AuthMethod::OAuth { token, provider } => {
-                assert_eq!(token, "tok456");
+                assert_eq!(token.as_str(), "tok456");
                 assert!(provider.is_empty());
             }
             _ => panic!("expected OAuth"),
@@ -423,7 +425,7 @@ mod tests {
 
         let method = mgr.get_auth_method().await.unwrap();
         match method {
-            AuthMethod::ApiKey(k) => assert_eq!(k, "key2"), // should see new key
+            AuthMethod::ApiKey(k) => assert_eq!(k.as_str(), "key2"), // should see new key
             _ => panic!("expected new key"),
         }
     }

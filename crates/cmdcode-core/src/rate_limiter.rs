@@ -1,19 +1,8 @@
+pub use crate::types::RateLimitBackend;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-
-/// Rate limiting backend type.
-#[derive(Debug, Clone)]
-pub enum RateLimitBackend {
-    /// Local in-memory rate limiter.
-    Local,
-    /// Redis-backed rate limiter (placeholder for future implementation).
-    Redis {
-        /// Redis connection URL.
-        url: String,
-    },
-}
 
 /// Rate limit configuration for a single API key.
 #[derive(Debug, Clone)]
@@ -24,6 +13,8 @@ pub struct RateLimitConfig {
     pub window_secs: u64,
     /// Backend to use for rate limiting.
     pub backend: RateLimitBackend,
+    /// Redis URL (only used if backend is Redis).
+    pub redis_url: Option<String>,
 }
 
 impl Default for RateLimitConfig {
@@ -32,6 +23,7 @@ impl Default for RateLimitConfig {
             max_requests: 100,
             window_secs: 60,
             backend: RateLimitBackend::Local,
+            redis_url: None,
         }
     }
 }
@@ -146,6 +138,7 @@ mod tests {
             max_requests: 5,
             window_secs: 60,
             backend: RateLimitBackend::Local,
+            redis_url: None,
         });
 
         // First 5 requests should be allowed
@@ -163,6 +156,7 @@ mod tests {
             max_requests: 2,
             window_secs: 60,
             backend: RateLimitBackend::Local,
+            redis_url: None,
         });
 
         // Different keys should have separate limits
@@ -185,6 +179,7 @@ mod tests {
             max_requests: 1,
             window_secs: 60,
             backend: RateLimitBackend::Local,
+            redis_url: None,
         });
 
         // Empty key should always be allowed (unauthenticated)
@@ -198,6 +193,7 @@ mod tests {
             max_requests: 10,
             window_secs: 60,
             backend: RateLimitBackend::Local,
+            redis_url: None,
         });
 
         assert_eq!(limiter.remaining_requests("key1").await, 10);
@@ -212,6 +208,7 @@ mod tests {
             max_requests: 2,
             window_secs: 60,
             backend: RateLimitBackend::Local,
+            redis_url: None,
         });
 
         // Exhaust the limit

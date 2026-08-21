@@ -276,7 +276,7 @@ async fn test_e2e_models_endpoint() {
 
     let method = auth.get_auth_method().await.unwrap();
     match method {
-        cmdcode_core::auth::AuthMethod::ApiKey(k) => assert_eq!(k, "test-key"),
+        cmdcode_core::auth::AuthMethod::ApiKey(k) => assert_eq!(k.as_str(), "test-key"),
         _ => panic!("expected API key"),
     }
 
@@ -774,7 +774,7 @@ async fn test_benchmark_through_proxy_vs_direct() {
         incoming_token: None,
         rate_limit_max_requests: 100,
         rate_limit_window_secs: 60,
-        rate_limit_backend: "local".into(),
+        rate_limit_backend: cmdcode_core::types::RateLimitBackend::Local,
         rate_limit_redis_url: None,
     };
     let auth = cmdcode_core::auth::AuthManager::new(auth_dir.clone(), 60);
@@ -968,7 +968,7 @@ async fn start_proxy_impl(
         incoming_token: incoming_token.map(|t| t.to_string()),
         rate_limit_max_requests: 100,
         rate_limit_window_secs: 60,
-        rate_limit_backend: "local".into(),
+        rate_limit_backend: cmdcode_core::types::RateLimitBackend::Local,
         rate_limit_redis_url: None,
     };
     let auth = cmdcode_core::auth::AuthManager::new(auth_dir, 60);

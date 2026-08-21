@@ -6,4 +6,7 @@
 .DS_Store
 
 # Local hunt/bounty tooling scratch files (not part of the project)
-.bounty-*
+.bounty-**.lock
+crates/cmdcode-core/fuzz/corpus/
+.bounty-findings.json
+.bounty-trace.jsonl

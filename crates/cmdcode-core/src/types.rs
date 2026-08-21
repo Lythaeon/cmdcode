@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Newtype for model identifiers — never bare strings.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -34,6 +35,180 @@ impl fmt::Display for ModelId {
 
 impl AsRef<str> for ModelId {
     fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Rate limit backend type — no string matching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RateLimitBackend {
+    /// Local in-memory rate limiter.
+    Local,
+    /// Redis-backed rate limiter.
+    Redis,
+}
+
+impl RateLimitBackend {
+    /// Parse a string into a RateLimitBackend, returning None if unrecognized.
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "local" => Some(Self::Local),
+            "redis" => Some(Self::Redis),
+            _ => None,
+        }
+    }
+
+    /// Return the string representation of this backend.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Redis => "redis",
+        }
+    }
+}
+
+impl fmt::Display for RateLimitBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Runtime environment — no string matching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Environment {
+    /// Production environment.
+    Production,
+    /// Development environment.
+    Development,
+    /// Staging environment.
+    Staging,
+}
+
+impl Environment {
+    /// Parse a string into an Environment, returning None if unrecognized.
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "production" => Some(Self::Production),
+            "development" => Some(Self::Development),
+            "staging" => Some(Self::Staging),
+            _ => None,
+        }
+    }
+
+    /// Return the string representation of this environment.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Production => "production",
+            Self::Development => "development",
+            Self::Staging => "staging",
+        }
+    }
+}
+
+impl fmt::Display for Environment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// CLI environment identifier — no string matching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CliEnvironment {
+    /// Production CLI environment.
+    Production,
+    /// Development CLI environment.
+    Development,
+    /// Staging CLI environment.
+    Staging,
+}
+
+impl CliEnvironment {
+    /// Parse a string into a CliEnvironment, returning None if unrecognized.
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "production" => Some(Self::Production),
+            "development" => Some(Self::Development),
+            "staging" => Some(Self::Staging),
+            _ => None,
+        }
+    }
+
+    /// Return the string representation of this CLI environment.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Production => "production",
+            Self::Development => "development",
+            Self::Staging => "staging",
+        }
+    }
+}
+
+impl fmt::Display for CliEnvironment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Sensitive credential string that zeroizes on drop.
+#[derive(Debug, Clone, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
+pub struct SensitiveString(String);
+
+impl SensitiveString {
+    /// Create a new SensitiveString from any string-like value.
+    pub fn new(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
+
+    /// Return the inner string slice.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Check if the string is empty.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Return the length of the string.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl fmt::Display for SensitiveString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Never print the actual value — use a placeholder
+        write!(f, "[REDACTED]")
+    }
+}
+
+impl AsRef<str> for SensitiveString {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl PartialEq for SensitiveString {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for SensitiveString {}
+
+impl std::hash::Hash for SensitiveString {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+impl std::ops::Deref for SensitiveString {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
         &self.0
     }
 }

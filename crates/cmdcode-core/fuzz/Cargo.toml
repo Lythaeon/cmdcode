@@ -91,3 +91,27 @@ name = "fuzz_harness_types"
 path = "fuzz_targets/fuzz_harness_types.rs"
 test = false
 bench = false
+
+[[bin]]
+name = "fuzz_rate_limit_backend"
+path = "fuzz_targets/fuzz_rate_limit_backend.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_sensitive_string"
+path = "fuzz_targets/fuzz_sensitive_string.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_environment"
+path = "fuzz_targets/fuzz_environment.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_cli_environment"
+path = "fuzz_targets/fuzz_cli_environment.rs"
+test = false
+bench = false
