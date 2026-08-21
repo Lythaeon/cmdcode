@@ -10,6 +10,7 @@ use std::time::Instant;
 use cmdcode_core::auth::AuthManager;
 use cmdcode_core::config::ProxyConfig;
 use cmdcode_core::model_catalog::get_model_catalog;
+use cmdcode_core::rate_limiter::RateLimiter;
 use cmdcode_core::types::{Effort, ModelId, RequestId};
 use cmdcode_core::wire_format::ChatCompletionRequest;
 use tokio_util::sync::CancellationToken;
@@ -27,6 +28,8 @@ pub struct CommandCodeProxy {
     pub upstream_client: Arc<UpstreamClient>,
     /// Request and stream metrics.
     pub metrics: Arc<Metrics>,
+    /// Rate limiter for API requests.
+    pub rate_limiter: Arc<RateLimiter>,
 }
 
 /// Per-request context passed through the proxy pipeline.
@@ -158,7 +161,7 @@ impl ProxyHttp for CommandCodeProxy {
 
         // Optional incoming-auth gate. /health and /metrics stay open for
         // monitors and scrapers; every other route requires the token.
-        if let Some(ref expected) = self.config.incoming_token {
+        let api_key = if let Some(ref expected) = self.config.incoming_token {
             let provided = session
                 .req_header()
                 .headers
@@ -175,6 +178,32 @@ impl ProxyHttp for CommandCodeProxy {
                     }
                 });
                 self.send_json(session, 401, &err).await?;
+                return Ok(true);
+            }
+            provided.to_string()
+        } else {
+            String::new()
+        };
+
+        // Rate limiting check
+        if self.config.rate_limit_max_requests > 0 {
+            if !self.rate_limiter.check_rate_limit(&api_key).await {
+                self.metrics.inc_error();
+                let remaining = self.rate_limiter.remaining_requests(&api_key).await;
+                let reset = self.rate_limiter.reset_time(&api_key).await;
+                tracing::warn!(
+                    api_key = %mask_api_key(&api_key),
+                    remaining = remaining,
+                    reset_secs = reset.as_secs(),
+                    "rate limit exceeded"
+                );
+                let err = serde_json::json!({
+                    "error": {
+                        "message": format!("rate limit exceeded, {} requests remaining, resets in {}s", remaining, reset.as_secs()),
+                        "type": "rate_limit_error"
+                    }
+                });
+                self.send_json(session, 429, &err).await?;
                 return Ok(true);
             }
         }
@@ -661,6 +690,17 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     // Also check that lengths match (constant-time)
     diff |= (a.len() ^ b.len()) as u8;
     diff == 0
+}
+
+/// Mask an API key for logging, showing only first and last 4 characters.
+fn mask_api_key(key: &str) -> String {
+    if key.len() <= 8 {
+        return "*".repeat(key.len());
+    }
+    let prefix = &key[..4];
+    let suffix = &key[key.len() - 4..];
+    let masked_len = key.len() - 8;
+    format!("{prefix}{}{suffix}", "*".repeat(masked_len))
 }
 
 #[cfg(test)]

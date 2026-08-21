@@ -12,6 +12,7 @@ pub mod upstream;
 
 use cmdcode_core::auth::AuthManager;
 use cmdcode_core::config::ProxyConfig;
+use cmdcode_core::rate_limiter::{RateLimiter, RateLimitBackend, RateLimitConfig};
 use pingora_core::server::Server;
 use std::sync::Arc;
 
@@ -37,16 +38,22 @@ impl ProxyService {
 
     /// Start the proxy server and run forever.
     pub fn run(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // F-1: Warn when binding to non-localhost without auth token.
+        // Require auth token when binding to non-localhost.
         let host = self.config.listen_addr.split(':').next().unwrap_or("");
         if host != "127.0.0.1" && host != "localhost" && self.config.incoming_token.is_none() {
-            eprintln!("[cmdcode] WARNING: binding to {} without COMMAND_CODE_PROXY_INCOMING_TOKEN set. Any network client can use your Command Code subscription through this proxy.", self.config.listen_addr);
-            eprintln!("[cmdcode] Set COMMAND_CODE_PROXY_INCOMING_TOKEN to require bearer token authentication on API routes.");
+            tracing::error!(
+                listen_addr = %self.config.listen_addr,
+                "binding to non-localhost requires COMMAND_CODE_PROXY_INCOMING_TOKEN"
+            );
+            return Err("auth token required for non-localhost binding".into());
         }
 
-        // F-7: Warn when upstream URL is HTTP (credentials sent in plaintext).
+        // Warn when upstream URL is HTTP (credentials sent in plaintext).
         if self.config.upstream_url.starts_with("http://") {
-            eprintln!("[cmdcode] WARNING: upstream URL {} uses HTTP. API credentials will be sent in plaintext. Use HTTPS for production.", self.config.upstream_url);
+            tracing::warn!(
+                upstream_url = %self.config.upstream_url,
+                "upstream uses HTTP - credentials sent in plaintext, use HTTPS for production"
+            );
         }
 
         let mut server = Server::new(None)?;
@@ -70,11 +77,36 @@ impl ProxyService {
             metrics.clone(),
         ));
 
+        let rate_limit_backend = match self.config.rate_limit_backend.as_str() {
+            "redis" => RateLimitBackend::Redis {
+                url: self
+                    .config
+                    .rate_limit_redis_url
+                    .clone()
+                    .unwrap_or_else(|| "redis://127.0.0.1:6379".to_string()),
+            },
+            _ => RateLimitBackend::Local,
+        };
+
+        let rate_limiter = Arc::new(RateLimiter::new(RateLimitConfig {
+            max_requests: self.config.rate_limit_max_requests,
+            window_secs: self.config.rate_limit_window_secs,
+            backend: rate_limit_backend,
+        }));
+
+        tracing::info!(
+            rate_limit_max = self.config.rate_limit_max_requests,
+            rate_limit_window = self.config.rate_limit_window_secs,
+            rate_limit_backend = %self.config.rate_limit_backend,
+            "rate limiting configured"
+        );
+
         let ctx = handler::CommandCodeProxy {
             config: self.config,
             auth: self.auth,
             upstream_client,
             metrics,
+            rate_limiter,
         };
 
         let mut my_proxy = handler::create_http_proxy_service(&server.configuration, ctx);
@@ -183,6 +215,10 @@ mod tests {
             tls_cert: None,
             tls_key: None,
             incoming_token: None,
+            rate_limit_max_requests: 100,
+            rate_limit_window_secs: 60,
+            rate_limit_backend: "local".into(),
+            rate_limit_redis_url: None,
         };
         let auth = AuthManager::new(config.auth_dir.clone(), 30);
         let _service = ProxyService::new(config, auth);

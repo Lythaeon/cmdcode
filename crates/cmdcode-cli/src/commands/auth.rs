@@ -1,27 +1,38 @@
 use std::path::PathBuf;
 
+/// Sanitize a path for display by replacing the home directory with ~.
+fn sanitize_path(path: &PathBuf) -> String {
+    let home = dirs::home_dir().unwrap_or_default();
+    if let Ok(stripped) = path.strip_prefix(&home) {
+        format!("~/{}", stripped.display())
+    } else {
+        path.display().to_string()
+    }
+}
+
 pub fn run() {
     let auth_dir = dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".commandcode");
     let auth_file = auth_dir.join("auth.json");
 
-    println!("cmdcode auth\n");
+    tracing::info!("checking authentication");
 
     if !auth_file.exists() {
-        eprintln!("error: auth.json not found at {}", auth_file.display());
-        eprintln!();
-        eprintln!("The command-code CLI is a hard dependency. Install and log in:");
-        eprintln!();
-        eprintln!("  npm install -g command-code");
-        eprintln!("  command-code login");
+        tracing::error!(
+            path = %sanitize_path(&auth_file),
+            "auth.json not found"
+        );
+        tracing::info!(
+            "install command-code CLI and run: command-code login"
+        );
         std::process::exit(1);
     }
 
     let content = match std::fs::read_to_string(&auth_file) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("error: failed to read auth.json: {e}");
+            tracing::error!(error = %e, "failed to read auth.json");
             std::process::exit(1);
         }
     };
@@ -29,13 +40,16 @@ pub fn run() {
     let auth: serde_json::Value = match serde_json::from_str(&content) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("error: invalid auth.json: {e}");
+            tracing::error!(error = %e, "invalid auth.json");
             std::process::exit(1);
         }
     };
 
-    println!("auth_dir:    {}", auth_dir.display());
-    println!("auth_file:   {}", auth_file.display());
+    tracing::info!(
+        auth_dir = %sanitize_path(&auth_dir),
+        auth_file = %sanitize_path(&auth_file),
+        "auth configuration"
+    );
 
     // API key
     let has_api_key = auth
@@ -46,9 +60,9 @@ pub fn run() {
     if has_api_key {
         let key = auth.get("apiKey").and_then(|v| v.as_str()).unwrap_or("");
         let masked = mask_credential(key);
-        println!("api_key:     {masked}");
+        tracing::info!(api_key = %masked, "API key configured");
     } else {
-        println!("api_key:     (not set)");
+        tracing::info!("api_key: not set");
     }
 
     // OAuth
@@ -63,55 +77,50 @@ pub fn run() {
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let masked = mask_credential(token);
-        println!("oauth_token: {masked}");
         let provider = auth
             .get("oauthProvider")
             .and_then(|v| v.as_str())
             .unwrap_or("(unknown)");
-        println!("oauth_provider: {provider}");
+        tracing::info!(oauth_token = %masked, provider = %provider, "OAuth configured");
     } else {
-        println!("oauth_token: (not set)");
+        tracing::info!("oauth_token: not set");
     }
 
     // User info
     if let Some(user_id) = auth.get("userId").and_then(|v| v.as_str()) {
         if !user_id.is_empty() {
-            println!("user_id:     {user_id}");
+            tracing::info!(user_id = %user_id);
         }
     }
     if let Some(user_name) = auth.get("userName").and_then(|v| v.as_str()) {
         if !user_name.is_empty() {
-            println!("user_name:   {user_name}");
+            tracing::info!(user_name = %user_name);
         }
     }
 
     // Config file
     let config_file = auth_dir.join("config.json");
     if config_file.exists() {
-        println!();
-        println!("config_file: {}", config_file.display());
+        tracing::info!(path = %sanitize_path(&config_file), "config file found");
         if let Ok(config_content) = std::fs::read_to_string(&config_file) {
             if let Ok(config) = serde_json::from_str::<serde_json::Value>(&config_content) {
                 if let Some(model) = config.get("model").and_then(|v| v.as_str()) {
-                    println!("preferred_model: {model}");
+                    tracing::info!(preferred_model = %model);
                 }
                 if let Some(taste) = config.get("tasteLearning").and_then(|v| v.as_bool()) {
-                    println!("taste_learning:  {taste}");
+                    tracing::info!(taste_learning = %taste);
                 }
                 if let Some(oauth) = config.get("oauthEnforced").and_then(|v| v.as_bool()) {
-                    println!("oauth_enforced:  {oauth}");
+                    tracing::info!(oauth_enforced = %oauth);
                 }
             }
         }
     }
 
-    println!();
     if has_api_key || has_oauth {
-        println!("authentication: OK");
+        tracing::info!("authentication: OK");
     } else {
-        eprintln!("authentication: NO CREDENTIALS");
-        eprintln!();
-        eprintln!("Run: command-code login");
+        tracing::error!("authentication: NO CREDENTIALS - run: command-code login");
         std::process::exit(1);
     }
 }

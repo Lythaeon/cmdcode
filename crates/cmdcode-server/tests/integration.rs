@@ -772,6 +772,10 @@ async fn test_benchmark_through_proxy_vs_direct() {
         tls_cert: None,
         tls_key: None,
         incoming_token: None,
+        rate_limit_max_requests: 100,
+        rate_limit_window_secs: 60,
+        rate_limit_backend: "local".into(),
+        rate_limit_redis_url: None,
     };
     let auth = cmdcode_core::auth::AuthManager::new(auth_dir.clone(), 60);
 
@@ -962,6 +966,10 @@ async fn start_proxy_impl(
         tls_cert: None,
         tls_key: None,
         incoming_token: incoming_token.map(|t| t.to_string()),
+        rate_limit_max_requests: 100,
+        rate_limit_window_secs: 60,
+        rate_limit_backend: "local".into(),
+        rate_limit_redis_url: None,
     };
     let auth = cmdcode_core::auth::AuthManager::new(auth_dir, 60);
 

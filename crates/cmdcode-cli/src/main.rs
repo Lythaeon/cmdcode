@@ -7,12 +7,23 @@ use clap::Parser;
 use cli::{Cli, Commands, SetupCommand};
 
 fn main() {
+    // Initialize tracing for CLI output
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| {
+                    tracing_subscriber::EnvFilter::new("info")
+                }),
+        )
+        .with_target(false)
+        .try_init();
+
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Serve => {
             if let Err(e) = commands::serve::run() {
-                eprintln!("error: {e}");
+                tracing::error!(error = %e, "failed to start proxy");
                 std::process::exit(1);
             }
         }

@@ -1,70 +1,66 @@
 use cmdcode_core::config::ProxyConfig;
 
 pub fn run() {
-    println!("cmdcode config\n");
+    tracing::info!("showing configuration");
 
     match ProxyConfig::from_env() {
         Ok(config) => {
-            println!("listen:             {}", config.listen_addr);
-            println!("upstream:           {}", config.upstream_url);
-            println!("default_model:      {}", config.default_model);
-            println!("timeout:            {}s", config.upstream_timeout_secs);
-            println!("max_retries:        {}", config.max_retries);
-            println!("max_concurrent:     {}", config.max_concurrent);
-            println!(
-                "cors_origin:        {}",
-                config.cors_origin.as_deref().unwrap_or("(not set)")
+            tracing::info!(listen = %config.listen_addr, "listen address");
+            tracing::info!(upstream = %config.upstream_url, "upstream URL");
+            tracing::info!(default_model = %config.default_model, "default model");
+            tracing::info!(timeout = config.upstream_timeout_secs, "upstream timeout");
+            tracing::info!(max_retries = config.max_retries, "max retries");
+            tracing::info!(max_concurrent = config.max_concurrent, "max concurrent");
+            tracing::info!(
+                cors_origin = config.cors_origin.as_deref().unwrap_or("(not set)"),
+                "CORS origin"
             );
-            println!(
-                "model_allowlist:    {}",
-                config
+            tracing::info!(
+                model_allowlist = config
                     .model_allowlist
                     .as_ref()
                     .map(|s| s.iter().cloned().collect::<Vec<_>>().join(", "))
-                    .unwrap_or_else(|| "(all allowed)".into())
+                    .unwrap_or_else(|| "(all allowed)".into()),
+                "model allowlist"
             );
-            println!("auth_dir:           {}", config.auth_dir.display());
-            println!("auth_cache_ttl:     {}s", config.auth_cache_ttl_secs);
-            println!("log_level:          {}", config.log_level);
-            println!("max_body_size:      {} bytes", config.max_body_size);
-            println!("stream_idle_timeout: {}s", config.stream_idle_timeout_secs);
-            println!(
-                "log_file:           {}",
-                config
+            tracing::info!(auth_dir = %config.auth_dir.display(), "auth directory");
+            tracing::info!(auth_cache_ttl = config.auth_cache_ttl_secs, "auth cache TTL");
+            tracing::info!(log_level = %config.log_level, "log level");
+            tracing::info!(max_body_size = config.max_body_size, "max body size");
+            tracing::info!(stream_idle_timeout = config.stream_idle_timeout_secs, "stream idle timeout");
+            tracing::info!(
+                log_file = config
                     .log_file
                     .as_ref()
                     .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "(stdout)".into())
+                    .unwrap_or_else(|| "(stdout)".into()),
+                "log file"
             );
-            println!("log_max_bytes:      {}", config.log_max_bytes);
-            println!("log_keep:           {}", config.log_keep);
-            println!(
-                "tls_cert:           {}",
-                config
+            tracing::info!(log_max_bytes = config.log_max_bytes, "log max bytes");
+            tracing::info!(log_keep = config.log_keep, "log keep");
+            tracing::info!(
+                tls_cert = config
                     .tls_cert
                     .as_ref()
                     .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "(not set)".into())
+                    .unwrap_or_else(|| "(not set)".into()),
+                "TLS certificate"
             );
-            println!(
-                "tls_key:            {}",
-                config
+            tracing::info!(
+                tls_key = config
                     .tls_key
                     .as_ref()
                     .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "(not set)".into())
+                    .unwrap_or_else(|| "(not set)".into()),
+                "TLS key"
             );
-            println!(
-                "incoming_token:     {}",
-                if config.incoming_token.is_some() {
-                    "(set)"
-                } else {
-                    "(not set)"
-                }
+            tracing::info!(
+                incoming_token = config.incoming_token.is_some(),
+                "incoming token"
             );
         }
         Err(e) => {
-            eprintln!("error: failed to parse configuration: {e}");
+            tracing::error!(error = %e, "failed to parse configuration");
             std::process::exit(1);
         }
     }

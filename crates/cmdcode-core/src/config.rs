@@ -44,6 +44,14 @@ pub struct ProxyConfig {
     pub tls_key: Option<PathBuf>,
     /// Optional bearer token clients must present to access the proxy.
     pub incoming_token: Option<String>,
+    /// Rate limit: maximum requests per window per API key (0 = unlimited).
+    pub rate_limit_max_requests: u64,
+    /// Rate limit: window duration in seconds.
+    pub rate_limit_window_secs: u64,
+    /// Rate limit: backend type ("local" or "redis").
+    pub rate_limit_backend: String,
+    /// Rate limit: Redis URL (only used if backend is "redis").
+    pub rate_limit_redis_url: Option<String>,
 }
 
 impl ProxyConfig {
@@ -156,6 +164,21 @@ impl ProxyConfig {
             .ok()
             .filter(|s| !s.trim().is_empty());
 
+        let rate_limit_max_requests = env::var("COMMAND_CODE_PROXY_RATE_LIMIT_MAX")
+            .unwrap_or_else(|_| "100".to_string())
+            .parse()
+            .unwrap_or(100);
+
+        let rate_limit_window_secs = env::var("COMMAND_CODE_PROXY_RATE_LIMIT_WINDOW")
+            .unwrap_or_else(|_| "60".to_string())
+            .parse()
+            .unwrap_or(60);
+
+        let rate_limit_backend = env::var("COMMAND_CODE_PROXY_RATE_LIMIT_BACKEND")
+            .unwrap_or_else(|_| "local".to_string());
+
+        let rate_limit_redis_url = env::var("COMMAND_CODE_PROXY_RATE_LIMIT_REDIS_URL").ok();
+
         Ok(Self {
             listen_addr,
             upstream_url,
@@ -176,6 +199,10 @@ impl ProxyConfig {
             tls_cert,
             tls_key,
             incoming_token,
+            rate_limit_max_requests,
+            rate_limit_window_secs,
+            rate_limit_backend,
+            rate_limit_redis_url,
         })
     }
 }

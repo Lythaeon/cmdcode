@@ -1207,6 +1207,10 @@ mod tests {
             tls_cert: None,
             tls_key: None,
             incoming_token: None,
+            rate_limit_max_requests: 100,
+            rate_limit_window_secs: 60,
+            rate_limit_backend: "local".into(),
+            rate_limit_redis_url: None,
         }
     }
 

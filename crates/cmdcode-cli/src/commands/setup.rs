@@ -2,7 +2,6 @@ use cmdcode_core::setup::{validate_proxy_url, HarnessType};
 use std::path::PathBuf;
 
 /// Sanitize a path for display by replacing the home directory with ~.
-/// This prevents directory structure disclosure.
 fn sanitize_path_for_display(path: &PathBuf) -> String {
     let home = dirs::home_dir().unwrap_or_default();
     if let Ok(stripped) = path.strip_prefix(&home) {
@@ -24,33 +23,26 @@ pub fn run_harness(harness_name: &str, dry_run: bool, force: bool) {
 
 /// Run the setup command.
 fn run(harness_filter: Option<&str>, dry_run: bool, force: bool) {
-    println!("cmdcode setup\n");
+    tracing::info!("running setup");
 
     let harnesses = detect_harnesses();
 
     if harnesses.is_empty() {
-        println!("No harnesses detected on this system.");
-        println!();
-        println!("Supported harnesses:");
-        println!("  - OpenCode    (opencode.json)");
-        println!("  - LiteLLM     (litellm_config.yaml)");
-        println!("  - Ollama      (ollama)");
-        println!("  - vLLM        (vllm)");
-        println!("  - Open WebUI  (open-webui)");
-        println!();
-        println!("Install a harness first, then run: cmdcode setup");
+        tracing::warn!("no harnesses detected on this system");
+        tracing::info!("supported harnesses: opencode, codex, hermes, litellm, ollama, vllm, open-webui");
+        tracing::info!("install a harness first, then run: cmdcode setup");
         return;
     }
 
-    println!("Detected {} harness(es):\n", harnesses.len());
+    tracing::info!(count = harnesses.len(), "harnesses detected");
 
     let proxy_url = std::env::var("COMMAND_CODE_PROXY_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:18080".into());
 
     // Validate proxy URL
     if !validate_proxy_url(&proxy_url) {
-        eprintln!("error: invalid proxy URL: {proxy_url}");
-        eprintln!("  URL must start with http:// or https:// and not contain path traversal");
+        tracing::error!(url = %proxy_url, "invalid proxy URL");
+        tracing::info!("URL must start with http:// or https:// and not contain path traversal");
         std::process::exit(1);
     }
 
@@ -71,15 +63,14 @@ fn run(harness_filter: Option<&str>, dry_run: bool, force: bool) {
             continue;
         }
 
-        println!("{}:", detected.harness_type.name());
-        println!("  installed: yes");
-        if let Some(version) = &detected.version {
-            println!("  version:   {version}");
-        }
-        if let Some(path) = &detected.config_path {
-            println!("  config:    {}", sanitize_path_for_display(path));
-        }
-        println!("  running:   {}", if detected.is_running { "yes" } else { "no" });
+        tracing::info!(
+            harness = %detected.harness_type.name(),
+            installed = true,
+            version = detected.version.as_deref().unwrap_or("unknown"),
+            config = detected.config_path.as_ref().map(|p| sanitize_path_for_display(p)).unwrap_or_else(|| "(none)".into()),
+            running = detected.is_running,
+            "harness detected"
+        );
 
         let config = HarnessConfig {
             harness_type: detected.harness_type.clone(),
@@ -91,121 +82,120 @@ fn run(harness_filter: Option<&str>, dry_run: bool, force: bool) {
 
         match &detected.harness_type {
             HarnessType::OpenCode => {
-                println!();
                 if dry_run {
-                    println!("  [dry-run] Would write OpenCode configuration:");
+                    tracing::info!("dry-run: would write OpenCode configuration");
                     let json = config.to_opencode_json();
                     let pretty = serde_json::to_string_pretty(&json).unwrap_or_default();
-                    for line in pretty.lines() {
-                        println!("    {line}");
-                    }
+                    tracing::debug!(config = %pretty, "OpenCode config preview");
                 } else {
                     match setup_opencode(&config, force) {
-                        Ok(path) => println!("  configured: {}", sanitize_path_for_display(&path)),
-                        Err(e) => eprintln!("  error: {e}"),
+                        Ok(path) => tracing::info!(
+                            path = %sanitize_path_for_display(&path),
+                            "OpenCode configured"
+                        ),
+                        Err(e) => tracing::error!(error = %e, "failed to configure OpenCode"),
                     }
                 }
             }
             HarnessType::Codex => {
-                println!();
                 if dry_run {
-                    println!("  [dry-run] Would write Codex configuration:");
+                    tracing::info!("dry-run: would write Codex configuration");
                     let text = config.to_codex_toml();
-                    for line in text.lines() {
-                        println!("    {line}");
-                    }
+                    tracing::debug!(config = %text, "Codex config preview");
                 } else {
                     match setup_codex(&config, force) {
-                        Ok(path) => println!("  configured: {}", sanitize_path_for_display(&path)),
-                        Err(e) => eprintln!("  error: {e}"),
+                        Ok(path) => tracing::info!(
+                            path = %sanitize_path_for_display(&path),
+                            "Codex configured"
+                        ),
+                        Err(e) => tracing::error!(error = %e, "failed to configure Codex"),
                     }
                 }
             }
             HarnessType::Hermes => {
-                println!();
                 if dry_run {
-                    println!("  [dry-run] Would write Hermes configuration:");
+                    tracing::info!("dry-run: would write Hermes configuration");
                     let text = config.to_hermes_yaml();
-                    for line in text.lines() {
-                        println!("    {line}");
-                    }
+                    tracing::debug!(config = %text, "Hermes config preview");
                 } else {
                     match setup_hermes(&config, force) {
-                        Ok(path) => println!("  configured: {}", sanitize_path_for_display(&path)),
-                        Err(e) => eprintln!("  error: {e}"),
+                        Ok(path) => tracing::info!(
+                            path = %sanitize_path_for_display(&path),
+                            "Hermes configured"
+                        ),
+                        Err(e) => tracing::error!(error = %e, "failed to configure Hermes"),
                     }
                 }
             }
             HarnessType::LiteLLM => {
-                println!();
                 if dry_run {
-                    println!("  [dry-run] Would write LiteLLM configuration:");
+                    tracing::info!("dry-run: would write LiteLLM configuration");
                     let json = config.to_litellm_config();
                     let pretty = serde_json::to_string_pretty(&json).unwrap_or_default();
-                    for line in pretty.lines() {
-                        println!("    {line}");
-                    }
+                    tracing::debug!(config = %pretty, "LiteLLM config preview");
                 } else {
                     match setup_litellm(&config, force) {
-                        Ok(path) => println!("  configured: {}", sanitize_path_for_display(&path)),
-                        Err(e) => eprintln!("  error: {e}"),
+                        Ok(path) => tracing::info!(
+                            path = %sanitize_path_for_display(&path),
+                            "LiteLLM configured"
+                        ),
+                        Err(e) => tracing::error!(error = %e, "failed to configure LiteLLM"),
                     }
                 }
             }
             HarnessType::Ollama => {
-                println!();
                 if dry_run {
-                    println!("  [dry-run] Would write Ollama configuration:");
+                    tracing::info!("dry-run: would write Ollama configuration");
                     let text = config.to_ollama_config();
-                    for line in text.lines() {
-                        println!("    {line}");
-                    }
+                    tracing::debug!(config = %text, "Ollama config preview");
                 } else {
                     match setup_ollama(&config, force) {
-                        Ok(path) => println!("  configured: {}", sanitize_path_for_display(&path)),
-                        Err(e) => eprintln!("  error: {e}"),
+                        Ok(path) => tracing::info!(
+                            path = %sanitize_path_for_display(&path),
+                            "Ollama configured"
+                        ),
+                        Err(e) => tracing::error!(error = %e, "failed to configure Ollama"),
                     }
                 }
             }
             HarnessType::Vllm => {
-                println!();
                 if dry_run {
-                    println!("  [dry-run] Would write vLLM configuration:");
+                    tracing::info!("dry-run: would write vLLM configuration");
                     let text = config.to_vllm_config();
-                    for line in text.lines() {
-                        println!("    {line}");
-                    }
+                    tracing::debug!(config = %text, "vLLM config preview");
                 } else {
                     match setup_vllm(&config, force) {
-                        Ok(path) => println!("  configured: {}", sanitize_path_for_display(&path)),
-                        Err(e) => eprintln!("  error: {e}"),
+                        Ok(path) => tracing::info!(
+                            path = %sanitize_path_for_display(&path),
+                            "vLLM configured"
+                        ),
+                        Err(e) => tracing::error!(error = %e, "failed to configure vLLM"),
                     }
                 }
             }
             HarnessType::OpenWebUI => {
-                println!();
                 if dry_run {
-                    println!("  [dry-run] Would write Open WebUI configuration:");
+                    tracing::info!("dry-run: would write Open WebUI configuration");
                     let json = config.to_openwebui_config();
                     let pretty = serde_json::to_string_pretty(&json).unwrap_or_default();
-                    for line in pretty.lines() {
-                        println!("    {line}");
-                    }
+                    tracing::debug!(config = %pretty, "Open WebUI config preview");
                 } else {
                     match setup_openwebui(&config, force) {
-                        Ok(path) => println!("  configured: {}", sanitize_path_for_display(&path)),
-                        Err(e) => eprintln!("  error: {e}"),
+                        Ok(path) => tracing::info!(
+                            path = %sanitize_path_for_display(&path),
+                            "Open WebUI configured"
+                        ),
+                        Err(e) => tracing::error!(error = %e, "failed to configure Open WebUI"),
                     }
                 }
             }
             HarnessType::Custom(name) => {
-                println!("  skipping: custom harness '{name}' (no built-in support)");
+                tracing::warn!(harness = %name, "skipping custom harness (no built-in support)");
             }
         }
-        println!();
     }
 
-    println!("Setup complete. Start the proxy with: cmdcode serve");
+    tracing::info!("setup complete, start the proxy with: cmdcode serve");
 }
 
 /// Detected harness installation.
