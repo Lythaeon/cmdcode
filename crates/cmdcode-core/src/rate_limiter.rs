@@ -220,4 +220,45 @@ mod tests {
         limiter.clear().await;
         assert!(limiter.check_rate_limit("key1").await);
     }
+
+    #[tokio::test]
+    async fn test_rate_limiter_default_config() {
+        let config = RateLimitConfig::default();
+        assert_eq!(config.max_requests, 100);
+        assert_eq!(config.window_secs, 60);
+        assert!(matches!(config.backend, RateLimitBackend::Local));
+        assert!(config.redis_url.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_window_expiry() {
+        // Use a very short window to test expiry
+        let limiter = RateLimiter::new(RateLimitConfig {
+            max_requests: 1,
+            window_secs: 0, // Immediate expiry
+            backend: RateLimitBackend::Local,
+            redis_url: None,
+        });
+
+        // First request allowed
+        assert!(limiter.check_rate_limit("key1").await);
+        // Second request should be allowed after window expiry
+        assert!(limiter.check_rate_limit("key1").await);
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_many_keys() {
+        let limiter = RateLimiter::new(RateLimitConfig {
+            max_requests: 1,
+            window_secs: 60,
+            backend: RateLimitBackend::Local,
+            redis_url: None,
+        });
+
+        // Different keys should have separate limits
+        for i in 0..100 {
+            let key = format!("key{i}");
+            assert!(limiter.check_rate_limit(&key).await);
+        }
+    }
 }

@@ -322,4 +322,62 @@ mod tests {
             Some(home.join(".open-webui/config.json"))
         );
     }
+
+    #[test]
+    fn test_validate_proxy_url() {
+        assert!(validate_proxy_url("http://localhost:8080"));
+        assert!(validate_proxy_url("https://example.com"));
+        assert!(!validate_proxy_url("ftp://example.com"));
+        assert!(!validate_proxy_url("javascript:alert(1)"));
+        assert!(!validate_proxy_url("http://example.com/../../../etc/passwd"));
+        assert!(!validate_proxy_url("http://example.com\0/path"));
+        assert!(!validate_proxy_url(""));
+    }
+
+    #[test]
+    fn test_is_installed() {
+        // Just verify the function doesn't panic on any harness type
+        let _ = HarnessType::OpenCode.is_installed();
+        let _ = HarnessType::Codex.is_installed();
+        let _ = HarnessType::Hermes.is_installed();
+        let _ = HarnessType::LiteLLM.is_installed();
+        let _ = HarnessType::Ollama.is_installed();
+        let _ = HarnessType::Vllm.is_installed();
+        let _ = HarnessType::OpenWebUI.is_installed();
+        let _ = HarnessType::Custom("test".into()).is_installed();
+    }
+
+    #[test]
+    fn test_is_running() {
+        // Just verify the function doesn't panic on any harness type
+        let _ = HarnessType::OpenCode.is_running();
+        let _ = HarnessType::Codex.is_running();
+        let _ = HarnessType::Hermes.is_running();
+        let _ = HarnessType::LiteLLM.is_running();
+        let _ = HarnessType::Ollama.is_running();
+        let _ = HarnessType::Vllm.is_running();
+        let _ = HarnessType::OpenWebUI.is_running();
+        let _ = HarnessType::Custom("test".into()).is_running();
+    }
+
+    #[test]
+    fn test_version() {
+        // Just verify the function doesn't panic on any harness type
+        let _ = HarnessType::OpenCode.version();
+        let _ = HarnessType::Codex.version();
+        let _ = HarnessType::Hermes.version();
+        let _ = HarnessType::LiteLLM.version();
+        let _ = HarnessType::Ollama.version();
+        let _ = HarnessType::Vllm.version();
+        let _ = HarnessType::OpenWebUI.version();
+        assert_eq!(HarnessType::Custom("test".into()).version(), None);
+    }
+
+    #[test]
+    fn test_detect_harnesses() {
+        // Just verify the function doesn't panic
+        let harnesses = detect_harnesses();
+        // Should return a Vec (may be empty)
+        let _ = harnesses.len();
+    }
 }
