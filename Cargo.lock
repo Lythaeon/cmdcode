@@ -368,6 +368,7 @@ dependencies = [
  "cmdcode-server",
  "dirs",
  "reqwest",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",

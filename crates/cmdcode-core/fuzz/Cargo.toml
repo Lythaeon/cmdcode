@@ -85,3 +85,9 @@ name = "fuzz_errors"
 path = "fuzz_targets/fuzz_errors.rs"
 test = false
 bench = false
+
+[[bin]]
+name = "fuzz_harness_types"
+path = "fuzz_targets/fuzz_harness_types.rs"
+test = false
+bench = false

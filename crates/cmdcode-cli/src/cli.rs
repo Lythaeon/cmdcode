@@ -55,4 +55,124 @@ pub enum Commands {
         long_about = "Start the proxy temporarily, send a minimal chat completion request,\nand verify the response. Checks: auth validity, upstream connectivity,\nand wire format translation.\n\nExits with code 0 on success, 1 on failure.\n\nRequires the proxy to NOT be already running on the configured port."
     )]
     Test,
+
+    /// Configure client harnesses to use the proxy
+    #[command(
+        about = "Configure client harnesses to use the proxy",
+        long_about = "Detect installed harnesses (OpenCode, Codex, Hermes, LiteLLM, Ollama, vLLM, Open WebUI)\nand configure them to use cmdcode as the proxy.\n\nRequires an explicit subcommand: 'all' to configure all detected harnesses,\nor a specific harness name.\n\nUse --dry-run to preview changes without writing files.",
+        alias = "configure"
+    )]
+    Setup {
+        #[command(subcommand)]
+        command: SetupCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SetupCommand {
+    /// Configure all detected harnesses
+    #[command(
+        about = "Configure all detected harnesses",
+        long_about = "Detect all installed harnesses and configure them to use cmdcode as the proxy.\n\nUse --dry-run to preview changes without writing files."
+    )]
+    All {
+        /// Preview configuration without writing files
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Overwrite existing configuration files
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Configure OpenCode
+    #[command(
+        about = "Configure OpenCode to use the proxy",
+        long_about = "Configure OpenCode to use cmdcode as the proxy.\nWrites configuration to ~/.config/opencode/opencode.json."
+    )]
+    OpenCode {
+        #[arg(long)]
+        dry_run: bool,
+
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Configure Codex CLI
+    #[command(
+        about = "Configure Codex CLI to use the proxy",
+        long_about = "Configure Codex CLI to use cmdcode as the proxy.\nWrites configuration to ~/.codex/cmdcode-proxy.toml."
+    )]
+    Codex {
+        #[arg(long)]
+        dry_run: bool,
+
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Configure Hermes
+    #[command(
+        about = "Configure Hermes to use the proxy",
+        long_about = "Configure Hermes to use cmdcode as the proxy.\nWrites configuration to ~/.hermes/cmdcode-proxy.yaml."
+    )]
+    Hermes {
+        #[arg(long)]
+        dry_run: bool,
+
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Configure LiteLLM
+    #[command(
+        about = "Configure LiteLLM to use the proxy",
+        long_about = "Configure LiteLLM to use cmdcode as the proxy.\nWrites configuration to litellm_config.json in the current directory."
+    )]
+    Litellm {
+        #[arg(long)]
+        dry_run: bool,
+
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Configure Ollama
+    #[command(
+        about = "Configure Ollama to use the proxy",
+        long_about = "Configure Ollama to use cmdcode as the proxy.\nWrites configuration to ~/.ollama/cmdcode-proxy.env."
+    )]
+    Ollama {
+        #[arg(long)]
+        dry_run: bool,
+
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Configure vLLM
+    #[command(
+        about = "Configure vLLM to use the proxy",
+        long_about = "Configure vLLM to use cmdcode as the proxy.\nWrites configuration to cmdcode-proxy.env in the current directory."
+    )]
+    Vllm {
+        #[arg(long)]
+        dry_run: bool,
+
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Configure Open WebUI
+    #[command(
+        about = "Configure Open WebUI to use the proxy",
+        long_about = "Configure Open WebUI to use cmdcode as the proxy.\nWrites configuration to ~/.open-webui/cmdcode-config.json."
+    )]
+    OpenWebui {
+        #[arg(long)]
+        dry_run: bool,
+
+        #[arg(long)]
+        force: bool,
+    },
 }

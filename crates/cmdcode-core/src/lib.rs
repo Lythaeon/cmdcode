@@ -9,6 +9,8 @@ pub mod config;
 pub mod error;
 /// Model catalog parsed from CLI-bundled model metadata.
 pub mod model_catalog;
+/// Harness detection and configuration.
+pub mod setup;
 /// Shared newtypes: model identifiers, effort levels, session IDs, etc.
 pub mod types;
 /// OpenAI and Command Code wire-format types and translation functions.
