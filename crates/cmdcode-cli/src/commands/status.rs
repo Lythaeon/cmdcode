@@ -1,8 +1,8 @@
 use cmdcode_core::model_catalog::get_model_catalog;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Sanitize a path for display by replacing the home directory with ~.
-fn sanitize_path(path: &PathBuf) -> String {
+fn sanitize_path(path: &Path) -> String {
     let home = dirs::home_dir().unwrap_or_default();
     if let Ok(stripped) = path.strip_prefix(&home) {
         format!("~/{}", stripped.display())

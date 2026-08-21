@@ -674,8 +674,8 @@ impl CommandCodeProxy {
     }
 }
 
-/// Constant-time string comparison. On length mismatch this still leaks the
-/// length, which is inherent to fixed-length bearer-token checks.
+/// Constant-time string comparison. Pads both inputs to the same length
+/// to avoid timing side-channels that could reveal token length.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     // Pad both to the same length to avoid length leak via timing.
     // Use the longer length so short tokens don't reveal their length

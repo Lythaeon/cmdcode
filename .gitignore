@@ -10,3 +10,5 @@
 crates/cmdcode-core/fuzz/corpus/
 .bounty-findings.json
 .bounty-trace.jsonl
+.ptt.json
+cmdcode/
