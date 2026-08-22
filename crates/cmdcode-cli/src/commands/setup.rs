@@ -29,15 +29,17 @@ fn run(harness_filter: Option<&str>, dry_run: bool, force: bool) {
 
     if harnesses.is_empty() {
         tracing::warn!("no harnesses detected on this system");
-        tracing::info!("supported harnesses: opencode, codex, hermes, litellm, ollama, vllm, open-webui");
+        tracing::info!(
+            "supported harnesses: opencode, codex, hermes, litellm, ollama, vllm, open-webui"
+        );
         tracing::info!("install a harness first, then run: cmdcode setup");
         return;
     }
 
     tracing::info!(count = harnesses.len(), "harnesses detected");
 
-    let proxy_url = std::env::var("COMMAND_CODE_PROXY_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:18080".into());
+    let proxy_url =
+        std::env::var("COMMAND_CODE_PROXY_URL").unwrap_or_else(|_| "http://127.0.0.1:18080".into());
 
     // Validate proxy URL
     if !validate_proxy_url(&proxy_url) {
@@ -48,8 +50,8 @@ fn run(harness_filter: Option<&str>, dry_run: bool, force: bool) {
 
     let api_key = std::env::var("COMMAND_CODE_PROXY_INCOMING_TOKEN").ok();
 
-    let default_model = std::env::var("COMMAND_CODE_PROXY_DEFAULT")
-        .unwrap_or_else(|_| "xiaomi/mimo-v2.5".into());
+    let default_model =
+        std::env::var("COMMAND_CODE_PROXY_DEFAULT").unwrap_or_else(|_| "xiaomi/mimo-v2.5".into());
 
     for detected in &harnesses {
         let matches_filter = harness_filter
@@ -434,8 +436,7 @@ fn setup_opencode(config: &HarnessConfig, force: bool) -> Result<PathBuf, String
     let content = serde_json::to_string_pretty(&json)
         .map_err(|e| format!("failed to serialize config: {e}"))?;
 
-    std::fs::write(&config_path, content)
-        .map_err(|e| format!("failed to write config: {e}"))?;
+    std::fs::write(&config_path, content).map_err(|e| format!("failed to write config: {e}"))?;
 
     Ok(config_path)
 }
@@ -458,8 +459,7 @@ fn setup_codex(config: &HarnessConfig, force: bool) -> Result<PathBuf, String> {
 
     let content = config.to_codex_toml();
 
-    std::fs::write(&config_path, content)
-        .map_err(|e| format!("failed to write config: {e}"))?;
+    std::fs::write(&config_path, content).map_err(|e| format!("failed to write config: {e}"))?;
 
     Ok(config_path)
 }
@@ -482,8 +482,7 @@ fn setup_hermes(config: &HarnessConfig, force: bool) -> Result<PathBuf, String> 
 
     let content = config.to_hermes_yaml();
 
-    std::fs::write(&config_path, content)
-        .map_err(|e| format!("failed to write config: {e}"))?;
+    std::fs::write(&config_path, content).map_err(|e| format!("failed to write config: {e}"))?;
 
     Ok(config_path)
 }
@@ -504,8 +503,7 @@ fn setup_litellm(config: &HarnessConfig, force: bool) -> Result<PathBuf, String>
     let content = serde_json::to_string_pretty(&json)
         .map_err(|e| format!("failed to serialize config: {e}"))?;
 
-    std::fs::write(&config_path, content)
-        .map_err(|e| format!("failed to write config: {e}"))?;
+    std::fs::write(&config_path, content).map_err(|e| format!("failed to write config: {e}"))?;
 
     Ok(config_path)
 }
@@ -528,15 +526,14 @@ fn setup_ollama(config: &HarnessConfig, force: bool) -> Result<PathBuf, String> 
 
     let content = config.to_ollama_config();
 
-    std::fs::write(&config_path, content)
-        .map_err(|e| format!("failed to write config: {e}"))?;
+    std::fs::write(&config_path, content).map_err(|e| format!("failed to write config: {e}"))?;
 
     Ok(config_path)
 }
 
 fn setup_vllm(config: &HarnessConfig, force: bool) -> Result<PathBuf, String> {
-    let config_dir = std::env::current_dir()
-        .map_err(|e| format!("failed to get current directory: {e}"))?;
+    let config_dir =
+        std::env::current_dir().map_err(|e| format!("failed to get current directory: {e}"))?;
     let config_path = config_dir.join("cmdcode-proxy.env");
 
     if config_path.exists() && !force {
@@ -548,8 +545,7 @@ fn setup_vllm(config: &HarnessConfig, force: bool) -> Result<PathBuf, String> {
 
     let content = config.to_vllm_config();
 
-    std::fs::write(&config_path, content)
-        .map_err(|e| format!("failed to write config: {e}"))?;
+    std::fs::write(&config_path, content).map_err(|e| format!("failed to write config: {e}"))?;
 
     Ok(config_path)
 }
@@ -574,8 +570,7 @@ fn setup_openwebui(config: &HarnessConfig, force: bool) -> Result<PathBuf, Strin
     let content = serde_json::to_string_pretty(&json)
         .map_err(|e| format!("failed to serialize config: {e}"))?;
 
-    std::fs::write(&config_path, content)
-        .map_err(|e| format!("failed to write config: {e}"))?;
+    std::fs::write(&config_path, content).map_err(|e| format!("failed to write config: {e}"))?;
 
     Ok(config_path)
 }
@@ -591,10 +586,7 @@ mod tests {
         assert_eq!(HarnessType::Ollama.name(), "Ollama");
         assert_eq!(HarnessType::Vllm.name(), "vLLM");
         assert_eq!(HarnessType::OpenWebUI.name(), "Open WebUI");
-        assert_eq!(
-            HarnessType::Custom("test".into()).name(),
-            "test"
-        );
+        assert_eq!(HarnessType::Custom("test".into()).name(), "test");
     }
 
     #[test]

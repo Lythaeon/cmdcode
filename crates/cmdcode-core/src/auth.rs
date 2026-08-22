@@ -209,8 +209,8 @@ impl AuthManager {
             .chars()
             .filter(|c| *c != '\r' && *c != '\n')
             .collect::<String>();
-        let cli_env = CliEnvironment::from_str_opt(&cli_env_str)
-            .unwrap_or(CliEnvironment::Production);
+        let cli_env =
+            CliEnvironment::from_str_opt(&cli_env_str).unwrap_or(CliEnvironment::Production);
         headers.insert("x-cli-environment".into(), cli_env.as_str().into());
         headers.insert("x-project-slug".into(), project_slug.into());
         headers.insert(

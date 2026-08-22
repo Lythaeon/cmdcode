@@ -24,10 +24,16 @@ pub fn run() {
                 "model allowlist"
             );
             tracing::info!(auth_dir = %config.auth_dir.display(), "auth directory");
-            tracing::info!(auth_cache_ttl = config.auth_cache_ttl_secs, "auth cache TTL");
+            tracing::info!(
+                auth_cache_ttl = config.auth_cache_ttl_secs,
+                "auth cache TTL"
+            );
             tracing::info!(log_level = %config.log_level, "log level");
             tracing::info!(max_body_size = config.max_body_size, "max body size");
-            tracing::info!(stream_idle_timeout = config.stream_idle_timeout_secs, "stream idle timeout");
+            tracing::info!(
+                stream_idle_timeout = config.stream_idle_timeout_secs,
+                "stream idle timeout"
+            );
             tracing::info!(
                 log_file = config
                     .log_file

@@ -12,7 +12,7 @@ pub mod upstream;
 
 use cmdcode_core::auth::AuthManager;
 use cmdcode_core::config::ProxyConfig;
-use cmdcode_core::rate_limiter::{RateLimiter, RateLimitConfig};
+use cmdcode_core::rate_limiter::{RateLimitConfig, RateLimiter};
 use pingora_core::server::Server;
 use std::sync::Arc;
 
