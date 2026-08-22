@@ -1783,7 +1783,8 @@ async fn test_model_allowlist_denies_disallowed_models() {
 
     // Send a request with a model not in the default catalog
     // The proxy forwards to upstream which may accept or reject it
-    let body = r#"{"model":"definitely-not-a-real-model","messages":[{"role":"user","content":"test"}]}"#;
+    let body =
+        r#"{"model":"definitely-not-a-real-model","messages":[{"role":"user","content":"test"}]}"#;
     let resp = client
         .post(format!("{}/v1/chat/completions", proxy))
         .header("content-type", "application/json")

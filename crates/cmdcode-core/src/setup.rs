@@ -77,20 +77,20 @@ impl HarnessType {
         }
     }
 
-/// Get the config path for this harness type.
-pub fn config_path(&self) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-    match self {
-        Self::OpenCode => Some(home.join(".config/opencode/opencode.json")),
-        Self::Codex => Some(home.join(".codex/config.toml")),
-        Self::Hermes => Some(home.join(".hermes/config.yaml")),
-        Self::LiteLLM => None, // No standard config path
-        Self::Ollama => Some(home.join(".ollama/config.json")),
-        Self::Vllm => None, // No standard config path
-        Self::OpenWebUI => Some(home.join(".open-webui/config.json")),
-        Self::Custom(_) => None,
+    /// Get the config path for this harness type.
+    pub fn config_path(&self) -> Option<PathBuf> {
+        let home = dirs::home_dir()?;
+        match self {
+            Self::OpenCode => Some(home.join(".config/opencode/opencode.json")),
+            Self::Codex => Some(home.join(".codex/config.toml")),
+            Self::Hermes => Some(home.join(".hermes/config.yaml")),
+            Self::LiteLLM => None, // No standard config path
+            Self::Ollama => Some(home.join(".ollama/config.json")),
+            Self::Vllm => None, // No standard config path
+            Self::OpenWebUI => Some(home.join(".open-webui/config.json")),
+            Self::Custom(_) => None,
+        }
     }
-}
 }
 
 /// Validate a proxy URL to ensure it's safe.
@@ -114,22 +114,12 @@ impl HarnessType {
     /// Check if this harness is installed.
     pub fn is_installed(&self) -> bool {
         match self {
-            Self::OpenCode => {
-                self.config_path()
-                    .map(|p| p.exists())
-                    .unwrap_or(false)
-            }
+            Self::OpenCode => self.config_path().map(|p| p.exists()).unwrap_or(false),
             Self::Codex => {
-                which_exists("codex")
-                    || self.config_path()
-                        .map(|p| p.exists())
-                        .unwrap_or(false)
+                which_exists("codex") || self.config_path().map(|p| p.exists()).unwrap_or(false)
             }
             Self::Hermes => {
-                which_exists("hermes")
-                    || self.config_path()
-                        .map(|p| p.exists())
-                        .unwrap_or(false)
+                which_exists("hermes") || self.config_path().map(|p| p.exists()).unwrap_or(false)
             }
             Self::LiteLLM => {
                 which_exists("litellm")
@@ -138,10 +128,7 @@ impl HarnessType {
             }
             Self::Ollama => which_exists("ollama"),
             Self::Vllm => which_exists("vllm"),
-            Self::OpenWebUI => {
-                which_exists("open-webui")
-                    || docker_container_exists("open-webui")
-            }
+            Self::OpenWebUI => which_exists("open-webui") || docker_container_exists("open-webui"),
             Self::Custom(_) => false,
         }
     }
@@ -153,13 +140,11 @@ impl HarnessType {
             Self::Codex => pgrep_running("codex"),
             Self::Hermes => pgrep_running("hermes"),
             Self::LiteLLM => pgrep_running("litellm"),
-            Self::Ollama => {
-                std::process::Command::new("curl")
-                    .args(["-s", "http://localhost:11434/api/tags"])
-                    .output()
-                    .map(|o| o.status.success())
-                    .unwrap_or(false)
-            }
+            Self::Ollama => std::process::Command::new("curl")
+                .args(["-s", "http://localhost:11434/api/tags"])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false),
             Self::Vllm => pgrep_running("vllm"),
             Self::OpenWebUI => docker_container_exists("open-webui"),
             Self::Custom(_) => false,
@@ -226,10 +211,7 @@ pub fn detect_harnesses() -> Vec<HarnessType> {
         HarnessType::OpenWebUI,
     ];
 
-    all_types
-        .into_iter()
-        .filter(|h| h.is_installed())
-        .collect()
+    all_types.into_iter().filter(|h| h.is_installed()).collect()
 }
 
 #[cfg(test)]
@@ -250,15 +232,27 @@ mod tests {
 
     #[test]
     fn test_harness_type_from_str() {
-        assert_eq!(HarnessType::from_str("opencode"), Some(HarnessType::OpenCode));
-        assert_eq!(HarnessType::from_str("open-code"), Some(HarnessType::OpenCode));
-        assert_eq!(HarnessType::from_str("OPENCODE"), Some(HarnessType::OpenCode));
+        assert_eq!(
+            HarnessType::from_str("opencode"),
+            Some(HarnessType::OpenCode)
+        );
+        assert_eq!(
+            HarnessType::from_str("open-code"),
+            Some(HarnessType::OpenCode)
+        );
+        assert_eq!(
+            HarnessType::from_str("OPENCODE"),
+            Some(HarnessType::OpenCode)
+        );
         assert_eq!(HarnessType::from_str("codex"), Some(HarnessType::Codex));
         assert_eq!(HarnessType::from_str("hermes"), Some(HarnessType::Hermes));
         assert_eq!(HarnessType::from_str("litellm"), Some(HarnessType::LiteLLM));
         assert_eq!(HarnessType::from_str("ollama"), Some(HarnessType::Ollama));
         assert_eq!(HarnessType::from_str("vllm"), Some(HarnessType::Vllm));
-        assert_eq!(HarnessType::from_str("openwebui"), Some(HarnessType::OpenWebUI));
+        assert_eq!(
+            HarnessType::from_str("openwebui"),
+            Some(HarnessType::OpenWebUI)
+        );
         assert_eq!(
             HarnessType::from_str("custom-tool"),
             Some(HarnessType::Custom("custom-tool".into()))
@@ -328,7 +322,9 @@ mod tests {
         assert!(validate_proxy_url("https://example.com"));
         assert!(!validate_proxy_url("ftp://example.com"));
         assert!(!validate_proxy_url("javascript:alert(1)"));
-        assert!(!validate_proxy_url("http://example.com/../../../etc/passwd"));
+        assert!(!validate_proxy_url(
+            "http://example.com/../../../etc/passwd"
+        ));
         assert!(!validate_proxy_url("http://example.com\0/path"));
         assert!(!validate_proxy_url(""));
     }

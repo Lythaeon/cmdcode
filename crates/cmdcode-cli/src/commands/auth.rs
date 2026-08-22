@@ -23,9 +23,7 @@ pub fn run() {
             path = %sanitize_path(&auth_file),
             "auth.json not found"
         );
-        tracing::info!(
-            "install command-code CLI and run: command-code login"
-        );
+        tracing::info!("install command-code CLI and run: command-code login");
         std::process::exit(1);
     }
 
