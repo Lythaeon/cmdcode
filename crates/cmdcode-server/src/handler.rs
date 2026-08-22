@@ -186,26 +186,26 @@ impl ProxyHttp for CommandCodeProxy {
         };
 
         // Rate limiting check
-        if self.config.rate_limit_max_requests > 0 {
-            if !self.rate_limiter.check_rate_limit(&api_key).await {
-                self.metrics.inc_error();
-                let remaining = self.rate_limiter.remaining_requests(&api_key).await;
-                let reset = self.rate_limiter.reset_time(&api_key).await;
-                tracing::warn!(
-                    api_key = %mask_api_key(&api_key),
-                    remaining = remaining,
-                    reset_secs = reset.as_secs(),
-                    "rate limit exceeded"
-                );
-                let err = serde_json::json!({
-                    "error": {
-                        "message": format!("rate limit exceeded, {} requests remaining, resets in {}s", remaining, reset.as_secs()),
-                        "type": "rate_limit_error"
-                    }
-                });
-                self.send_json(session, 429, &err).await?;
-                return Ok(true);
-            }
+        if self.config.rate_limit_max_requests > 0
+            && !self.rate_limiter.check_rate_limit(&api_key).await
+        {
+            self.metrics.inc_error();
+            let remaining = self.rate_limiter.remaining_requests(&api_key).await;
+            let reset = self.rate_limiter.reset_time(&api_key).await;
+            tracing::warn!(
+                api_key = %mask_api_key(&api_key),
+                remaining = remaining,
+                reset_secs = reset.as_secs(),
+                "rate limit exceeded"
+            );
+            let err = serde_json::json!({
+                "error": {
+                    "message": format!("rate limit exceeded, {} requests remaining, resets in {}s", remaining, reset.as_secs()),
+                    "type": "rate_limit_error"
+                }
+            });
+            self.send_json(session, 429, &err).await?;
+            return Ok(true);
         }
 
         // Read and parse body with size limit.

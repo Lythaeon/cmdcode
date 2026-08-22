@@ -123,6 +123,8 @@ mod tests {
 
     #[test]
     fn test_config_whitespace_models() {
+        // Clean up any leftover env vars from parallel tests
+        std::env::remove_var("COMMAND_CODE_PROXY_HOST");
         std::env::set_var("COMMAND_CODE_PROXY_MODELS", "  ,  ,  ");
         let config = ProxyConfig::from_env().unwrap();
         // Empty entries after splitting/trimming should result in no allowlist

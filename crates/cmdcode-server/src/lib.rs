@@ -12,7 +12,7 @@ pub mod upstream;
 
 use cmdcode_core::auth::AuthManager;
 use cmdcode_core::config::ProxyConfig;
-use cmdcode_core::rate_limiter::{RateLimiter, RateLimitBackend, RateLimitConfig};
+use cmdcode_core::rate_limiter::{RateLimiter, RateLimitConfig};
 use pingora_core::server::Server;
 use std::sync::Arc;
 
@@ -77,15 +77,10 @@ impl ProxyService {
             metrics.clone(),
         ));
 
-        let rate_limit_backend = match self.config.rate_limit_backend {
-            RateLimitBackend::Redis => RateLimitBackend::Redis,
-            RateLimitBackend::Local => RateLimitBackend::Local,
-        };
-
         let rate_limiter = Arc::new(RateLimiter::new(RateLimitConfig {
             max_requests: self.config.rate_limit_max_requests,
             window_secs: self.config.rate_limit_window_secs,
-            backend: rate_limit_backend,
+            backend: self.config.rate_limit_backend,
             redis_url: self.config.rate_limit_redis_url.clone(),
         }));
 
