@@ -71,7 +71,7 @@ cargo install --path crates/cmdcode-cli
 ### Run
 
 ```bash
-cmdcode
+cmdcode serve
 # listening on http://127.0.0.1:18080
 ```
 
@@ -80,7 +80,7 @@ non-localhost exposure), set `COMMAND_CODE_PROXY_INCOMING_TOKEN` before
 starting:
 
 ```bash
-COMMAND_CODE_PROXY_INCOMING_TOKEN=my-secret-token cmdcode
+COMMAND_CODE_PROXY_INCOMING_TOKEN=my-secret-token cmdcode serve
 ```
 
 ### Test
@@ -104,6 +104,18 @@ curl http://127.0.0.1:18080/v1/chat/completions \
 for monitors and scrapers. When `COMMAND_CODE_PROXY_INCOMING_TOKEN` is set,
 every other route requires `Authorization: Bearer <token>`.
 
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `cmdcode serve` | Start the proxy server |
+| `cmdcode status` | Check auth and model catalog status |
+| `cmdcode models` | List available models |
+| `cmdcode config` | Show current configuration |
+| `cmdcode auth` | Show authentication status |
+| `cmdcode test` | Send a test request to verify proxy |
+| `cmdcode setup` | Configure client harnesses |
+
 ## Features
 
 - **OpenAI-compatible** - `/v1/chat/completions` (stream + non-stream)
@@ -117,6 +129,31 @@ every other route requires `Authorization: Bearer <token>`.
 - **Health check** - `GET /health` for monitoring
 - **CORS** - optional CORS headers for browser clients
 - **Concurrency** - Pingora handles multiple simultaneous agents
+- **Rate limiting** - configurable per-key rate limits (local or Redis backend)
+- **Security hardening** - zeroize for credentials, newtypes, constant-time comparison
+- **Harness auto-detection** - detects OpenCode, Codex, Hermes, LiteLLM, Ollama, vLLM, Open WebUI
+- **Fuzz targets** - 14 fuzz targets covering wire format, auth, rate limiting, and harness types
+
+## Setup
+
+Configure client harnesses to use cmdcode as their proxy:
+
+```bash
+# Configure all detected harnesses
+cmdcode setup all
+
+# Configure a specific harness
+cmdcode setup opencode
+cmdcode setup codex
+cmdcode setup hermes
+cmdcode setup litellm
+cmdcode setup ollama
+cmdcode setup vllm
+cmdcode setup open-webui
+
+# Preview without writing files
+cmdcode setup all --dry-run
+```
 
 ## Wire it into OpenCode
 
@@ -188,6 +225,10 @@ model_list:
 | `COMMAND_CODE_PROXY_INCOMING_TOKEN` | (unset) | Require bearer token on API routes |
 | `COMMAND_CODE_PROXY_TLS_CERT` | (unset) | TLS cert path (with KEY enables HTTPS) |
 | `COMMAND_CODE_PROXY_TLS_KEY` | (unset) | TLS key path |
+| `COMMAND_CODE_PROXY_RATE_LIMIT_MAX` | `100` | Max requests per window per key (0 = unlimited) |
+| `COMMAND_CODE_PROXY_RATE_LIMIT_WINDOW` | `60` | Rate limit window in seconds |
+| `COMMAND_CODE_PROXY_RATE_LIMIT_BACKEND` | `local` | Rate limit backend (`local` or `redis`) |
+| `COMMAND_CODE_PROXY_RATE_LIMIT_REDIS_URL` | (unset) | Redis URL for distributed rate limiting |
 
 ## Endpoints
 
@@ -200,6 +241,16 @@ model_list:
 
 See `docs/setup.md` for supervision (`scripts/supervise.sh`), log rotation,
 and soak (`scripts/soak.sh`) tooling.
+
+## Security
+
+- **Zeroize on drop** - sensitive credentials are zeroed in memory when dropped
+- **Constant-time comparison** - bearer token validation uses padding to prevent length leaks
+- **Newtypes** - rate limit backends, environments, and sensitive strings use type-safe enums
+- **Path traversal prevention** - harness names are sanitized before use
+- **Rate limiting** - configurable per-key rate limits with local or Redis backend
+- **Fuzz testing** - 14 fuzz targets covering wire format, auth, rate limiting, and harness types
+- **No secrets in logs** - `SensitiveString` redacts values in debug/display output
 
 ## Performance
 
