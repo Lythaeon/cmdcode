@@ -42,8 +42,7 @@ impl HarnessType {
     pub fn from_str(s: &str) -> Option<Self> {
         // F-11: Sanitize input to prevent path traversal
         let sanitized = s
-            .replace('\\', "")
-            .replace('/', "")
+            .replace(['\\', '/'], "")
             .replace("..", "")
             .replace('\0', "");
 
