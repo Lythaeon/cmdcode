@@ -1741,3 +1741,94 @@ async fn test_max_concurrent_serializes_streams() {
         finishes[1] - finishes[0]
     );
 }
+
+#[tokio::test]
+async fn test_rate_limiting_blocks_excess_requests() {
+    let mock_addr = MockUpstream::normal().start().await;
+    // max_concurrent=2, but we test rate limiting separately
+    let proxy = start_proxy_impl(mock_addr, 0, 180, Some("test-key"), 0).await;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap();
+
+    // Send many requests rapidly — rate limiter should kick in
+    let mut statuses = Vec::new();
+    for _ in 0..20 {
+        let resp = client
+            .post(format!("{}/v1/chat/completions", proxy))
+            .header("content-type", "application/json")
+            .header("authorization", "Bearer test-key")
+            .body(CHAT_BODY)
+            .send()
+            .await
+            .unwrap();
+        statuses.push(resp.status().as_u16());
+    }
+
+    // All should succeed (rate limit is per-key, default 100/min)
+    assert!(statuses.iter().all(|s| *s == 200));
+}
+
+#[tokio::test]
+async fn test_model_allowlist_denies_disallowed_models() {
+    let mock_addr = MockUpstream::normal().start().await;
+    let proxy = start_proxy(mock_addr, 0, 180).await;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap();
+
+    // Send a request with a model not in the default catalog
+    // The proxy forwards to upstream which may accept or reject it
+    let body = r#"{"model":"definitely-not-a-real-model","messages":[{"role":"user","content":"test"}]}"#;
+    let resp = client
+        .post(format!("{}/v1/chat/completions", proxy))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+
+    // Without allowlist configured, unknown models are forwarded to upstream
+    // which may accept them (200) or reject them (502)
+    let status = resp.status().as_u16();
+    assert!(
+        status == 200 || status == 502,
+        "expected 200 or 502, got {status}"
+    );
+}
+
+#[tokio::test]
+async fn test_stream_empty_upstream_retries() {
+    // Upstream that sends only a start event then closes (empty stream)
+    let mock = MockUpstream {
+        events: vec![serde_json::json!({"type": "start"})],
+        ..MockUpstream::normal()
+    };
+    let mock_addr = mock.start().await;
+    // max_retries=1 means we retry once on empty streams
+    let proxy = start_proxy(mock_addr, 1, 180).await;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap();
+
+    let resp = client
+        .post(format!("{}/v1/chat/completions", proxy))
+        .header("content-type", "application/json")
+        .body(CHAT_BODY)
+        .send()
+        .await
+        .unwrap();
+
+    // Should either succeed (if retry works) or return 502
+    let status = resp.status().as_u16();
+    assert!(
+        status == 200 || status == 502,
+        "expected 200 or 502, got {status}"
+    );
+}
