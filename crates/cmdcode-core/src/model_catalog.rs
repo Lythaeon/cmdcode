@@ -93,10 +93,17 @@ fn parse_context_window(s: &str) -> ContextWindow {
 }
 
 /// Get the model catalog.
-/// Priority: COMMAND_CODE_PROXY_MODELS_CATALOG env var (path to models.md) > CLI auto-discovery > empty.
+/// Priority: COMMAND_CODE_PROXY_MODELS_CATALOG env var > bundled catalog > CLI discovery > empty.
 pub fn get_model_catalog() -> &'static HashMap<ModelId, ModelMeta> {
     static CATALOG: OnceLock<HashMap<ModelId, ModelMeta>> = OnceLock::new();
     CATALOG.get_or_init(|| {
+        // 0. Try bundled catalog (compiled into the binary)
+        let bundled = parse_models_md(include_str!("models.md"));
+        if !bundled.is_empty() {
+            eprintln!("[cmdcode] loaded {} models (bundled)", bundled.len());
+            return bundled;
+        }
+
         // 1. Try env var pointing to a models.md file
         if let Ok(path_str) = std::env::var("COMMAND_CODE_PROXY_MODELS_CATALOG") {
             let path = PathBuf::from(&path_str);
@@ -113,7 +120,7 @@ pub fn get_model_catalog() -> &'static HashMap<ModelId, ModelMeta> {
             }
         }
 
-        // 2. Try CLI auto-discovery (single-tenant only)
+        // 2. Try CLI auto-discovery (legacy fallback)
         if let Some(path) = find_models_md() {
             if let Ok(content) = std::fs::read_to_string(&path) {
                 let catalog = parse_models_md(&content);
@@ -127,7 +134,7 @@ pub fn get_model_catalog() -> &'static HashMap<ModelId, ModelMeta> {
         }
 
         // 3. Empty catalog — proxy still works, just /v1/models returns empty
-        eprintln!("[cmdcode] no models found (set COMMAND_CODE_PROXY_MODELS_CATALOG or install command-code CLI)");
+        eprintln!("[cmdcode] no models found");
         HashMap::new()
     })
 }

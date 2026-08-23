@@ -24,28 +24,9 @@ traffic from the official `cmd` CLI.
 
 ### Prerequisites
 
-**You need the `command-code` CLI installed** — but only for the model
-catalog (the proxy reads its bundled `models.md` to populate `/v1/models`).
-You do **not** need to run `command-code login` — `cmdcode auth` handles
-signing in via the Studio auth page.
-
-```bash
-npm install -g command-code
-```
-
-Verify the model catalog is accessible:
-
-```bash
-ls ~/.linuxbrew/lib/node_modules/command-code/dist/bundled/command-code-knowledge/reference/models.md
-```
-
-If the CLI's `models.md` is not found at a standard location, point the
-proxy at it with `COMMAND_CODE_PROXY_MODELS_CATALOG=/path/to/models.md`.
-Without it, the proxy serves requests but `/v1/models` returns empty.
-
-> **Getting new models:** the catalog is read once at proxy startup from the
-> CLI's bundled `models.md`. Update the CLI (`npm update -g command-code`)
-> and restart the proxy to pick up new models.
+**No external CLI required.** The model catalog is bundled in the binary. Taste
+files live at `~/.commandcode/taste/taste.md` (created by the agent during
+conversations, or managed via `cmdcode taste`).
 
 ### Install
 
