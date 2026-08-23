@@ -42,12 +42,15 @@ pub enum Commands {
     )]
     Config,
 
-    /// Manage accounts and authentication (interactive TUI)
+    /// Manage accounts and authentication
     #[command(
-        about = "Interactive account manager: list, use, logout, add accounts",
-        long_about = "Open an interactive TUI to manage Command Code accounts.\n\n• Sign in a new account (Studio callback or paste API key)\n• Switch which account the proxy uses as the active credential\n• Remove one or more stored accounts\n• Toggle auto-rotate (switch accounts on credit/rate-limit errors)\n\nCredentials are stored in ~/.cmdcode/accounts.json.\nThe proxy reads the active account and picks up changes without restart.\n\nAlso works non-interactively for scripting: the TUI handles everything."
+        about = "Manage Command Code accounts (list, use, logout, add)",
+        long_about = "Manage Command Code accounts stored in ~/.cmdcode/accounts.json.\n\nWithout subcommand: opens the interactive TUI.\nWith subcommand: performs the action directly."
     )]
-    Auth,
+    Auth {
+        #[command(subcommand)]
+        command: Option<AuthCommand>,
+    },
 
     /// Send a test request to verify proxy functionality
     #[command(
@@ -174,5 +177,35 @@ pub enum SetupCommand {
 
         #[arg(long)]
         force: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AuthCommand {
+    /// List all stored accounts
+    #[command(about = "List stored accounts and show which is active")]
+    List,
+
+    /// Switch the active account
+    #[command(about = "Switch which account the proxy uses")]
+    Use,
+
+    /// Log out one or more accounts
+    #[command(about = "Remove one or more accounts")]
+    Logout,
+
+    /// Sign in a new account (Studio callback or paste API key)
+    #[command(about = "Sign in a new Command Code account")]
+    Add,
+
+    /// Toggle auto-rotate setting
+    #[command(
+        about = "Toggle auto-rotate (switch accounts on credit/rate-limit errors)",
+        long_about = "Toggle the auto-rotate setting. When enabled, the proxy automatically\nswitches to the next account when the active one is rejected or rate-limited."
+    )]
+    AutoRotate {
+        /// Set auto-rotate to on or off
+        #[arg(value_name = "on|off")]
+        state: Option<String>,
     },
 }

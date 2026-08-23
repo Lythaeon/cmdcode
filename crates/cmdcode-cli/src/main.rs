@@ -5,7 +5,7 @@ mod cli;
 mod commands;
 
 use clap::Parser;
-use cli::{Cli, Commands, SetupCommand};
+use cli::{AuthCommand, Cli, Commands, SetupCommand};
 
 fn main() {
     // Initialize tracing for CLI output
@@ -29,7 +29,14 @@ fn main() {
         Commands::Status => commands::status::run(),
         Commands::Models => commands::models::run(),
         Commands::Config => commands::config::run(),
-        Commands::Auth => auth::run(),
+        Commands::Auth { command } => match command {
+            None => auth::run(),
+            Some(AuthCommand::List) => auth::list(),
+            Some(AuthCommand::Use) => auth::use_account(),
+            Some(AuthCommand::Logout) => auth::logout(),
+            Some(AuthCommand::Add) => auth::add(),
+            Some(AuthCommand::AutoRotate { state }) => auth::toggle_auto_rotate(state.as_deref()),
+        },
         Commands::Test => commands::test::run(),
         Commands::Setup { command } => match command {
             SetupCommand::All { dry_run, force } => {

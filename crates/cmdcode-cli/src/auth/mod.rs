@@ -86,13 +86,32 @@ pub fn run() {
             Some(Menu::Use) => use_account(),
             Some(Menu::Add) => add(),
             Some(Menu::Logout) => logout(),
-            Some(Menu::Rotate) => toggle_auto_rotate(),
+            Some(Menu::Rotate) => toggle_auto_rotate(None),
             Some(Menu::Quit) | None => return,
         }
     }
 }
 
-fn use_account() {
+/// Non-interactive: list all accounts in the vault.
+pub fn list() {
+    let vault = match store().load() {
+        Ok(v) => v,
+        Err(e) => fail(&format!("failed to read vault: {e}")),
+    };
+    if vault.is_empty() {
+        println!("no accounts");
+        return;
+    }
+    println!("Accounts ({}):", vault.len());
+    for acct in &vault.accounts {
+        let is_active = vault.active.as_deref() == Some(&acct.id());
+        let marker = if is_active { "*" } else { " " };
+        let suffix = if is_active { "  (active)" } else { "" };
+        println!(" {marker} {}{suffix}", acct.display_name());
+    }
+}
+
+pub fn use_account() {
     let mut vault = match store().load() {
         Ok(v) => v,
         Err(e) => fail(&format!("failed to read vault: {e}")),
@@ -124,7 +143,7 @@ fn use_account() {
     }
 }
 
-fn logout() {
+pub fn logout() {
     let mut vault = match store().load() {
         Ok(v) => v,
         Err(e) => fail(&format!("failed to read vault: {e}")),
@@ -165,26 +184,29 @@ fn logout() {
     }
 }
 
-fn toggle_auto_rotate() {
+pub fn toggle_auto_rotate(state: Option<&str>) {
     let mut vault = match store().load() {
         Ok(v) => v,
         Err(e) => fail(&format!("failed to read vault: {e}")),
     };
-    let new_val = !vault.settings.auto_rotate;
-    let current = if vault.settings.auto_rotate {
-        "ON"
-    } else {
-        "OFF"
+    let new_val = match state {
+        Some("on") | Some("ON") | Some("true") | Some("1") => true,
+        Some("off") | Some("OFF") | Some("false") | Some("0") => false,
+        _ => {
+            let current = if vault.settings.auto_rotate {
+                "ON"
+            } else {
+                "OFF"
+            };
+            let ok = Confirm::new(&format!(
+                "Current: auto-rotate {current}\nEnable auto-rotate when an account hits its limit / is rejected?"
+            ))
+            .with_default(!vault.settings.auto_rotate)
+            .prompt();
+            matches!(ok, Ok(true))
+        }
     };
-    let ok = Confirm::new(&format!(
-        "Current: auto-rotate {current}\nEnable auto-rotate when an account hits its limit / is rejected?"
-    ))
-    .with_default(new_val)
-    .prompt();
-    match ok {
-        Ok(true) => vault.settings.auto_rotate = true,
-        _ => vault.settings.auto_rotate = false,
-    }
+    vault.settings.auto_rotate = new_val;
     if let Err(e) = store().save(&vault) {
         println!("failed to save vault: {e}");
     } else {
@@ -197,7 +219,7 @@ fn toggle_auto_rotate() {
     }
 }
 
-fn add() {
+pub fn add() {
     let (port, state, url) = match login::make_auth_url() {
         Ok(v) => v,
         Err(e) => {
