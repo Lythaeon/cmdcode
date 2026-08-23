@@ -170,7 +170,15 @@ impl UpstreamClient {
                                         body: err.to_string(),
                                     };
                                     if is_auth_rejected(status) && !auth_retried {
-                                        self.auth.invalidate_cache().await;
+                                        if let Some(name) = self.auth.on_auth_rejected().await {
+                                            tracing::warn!(
+                                                account = %name,
+                                                status = status,
+                                                "credential rejected; rotated to account"
+                                            );
+                                        } else {
+                                            self.auth.invalidate_cache().await;
+                                        }
                                         headers =
                                             self.auth.build_headers(&cwd).await.map_err(|e| {
                                                 UpstreamError::Io(std::io::Error::other(
@@ -198,7 +206,15 @@ impl UpstreamClient {
                             body: body_text,
                         };
                         if is_auth_rejected(status) && !auth_retried {
-                            self.auth.invalidate_cache().await;
+                            if let Some(name) = self.auth.on_auth_rejected().await {
+                                tracing::warn!(
+                                    account = %name,
+                                    status = status,
+                                    "credential rejected; rotated to account"
+                                );
+                            } else {
+                                self.auth.invalidate_cache().await;
+                            }
                             headers = self.auth.build_headers(&cwd).await.map_err(|e| {
                                 UpstreamError::Io(std::io::Error::other(e.to_string()))
                             })?;
@@ -539,10 +555,12 @@ fn is_retryable(status: u16) -> bool {
     matches!(status, 502..=504)
 }
 
-/// A 401/403 upstream response means our cached credential is stale — refresh
-/// it and retry once (handled separately from the network-retry budget).
+/// A 401/403/429 upstream response means the active credential is stale,
+/// revoked, or exhausted — refresh it (and optionally rotate accounts when
+/// auto-rotate is enabled) and retry once (handled separately from the
+/// network-retry budget). 429 covers rate-limit and credits-exhausted edges.
 fn is_auth_rejected(status: u16) -> bool {
-    status == 401 || status == 403
+    matches!(status, 401 | 403 | 429)
 }
 
 /// Directory listing of `cwd` (non-hidden entries), cached for a short TTL so

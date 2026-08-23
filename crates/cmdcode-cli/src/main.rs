@@ -1,5 +1,6 @@
 //! Command Code OpenAI-compatible proxy server binary.
 
+mod auth;
 mod cli;
 mod commands;
 
@@ -28,7 +29,7 @@ fn main() {
         Commands::Status => commands::status::run(),
         Commands::Models => commands::models::run(),
         Commands::Config => commands::config::run(),
-        Commands::Auth => commands::auth::run(),
+        Commands::Auth => auth::run(),
         Commands::Test => commands::test::run(),
         Commands::Setup { command } => match command {
             SetupCommand::All { dry_run, force } => {

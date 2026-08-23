@@ -20,7 +20,8 @@ cmdcode-core.workspace = true
 cmdcode-server.workspace = true
 clap.workspace = true
 dirs = "5"
-reqwest = { version = "0.12", features = ["json"] }
+inquire = "0.7"
+reqwest = { version = "0.12", features = ["json", "blocking"] }
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
 tokio.workspace = true

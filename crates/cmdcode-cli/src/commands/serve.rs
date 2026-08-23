@@ -1,3 +1,4 @@
+use cmdcode_core::accounts::AccountStore;
 use cmdcode_core::auth::AuthManager;
 use cmdcode_core::config::ProxyConfig;
 use cmdcode_server::logging::RotatingLog;
@@ -22,7 +23,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         fmt.init();
     }
 
-    let auth = AuthManager::new(config.auth_dir.clone(), config.auth_cache_ttl_secs);
+    let auth = AuthManager::with_vault(
+        config.auth_dir.clone(),
+        config.auth_cache_ttl_secs,
+        AccountStore::default(),
+    );
 
     tracing::info!(
         listen = %config.listen_addr,

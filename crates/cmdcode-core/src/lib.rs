@@ -1,6 +1,8 @@
 //! Core types, configuration, and wire-format translation for the Command Code
 //! OpenAI-compatible proxy.
 
+/// Multi-account credential vault.
+pub mod accounts;
 /// Authentication and credential management.
 pub mod auth;
 /// Proxy configuration loaded from environment variables.

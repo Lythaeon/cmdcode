@@ -61,6 +61,18 @@ pub enum AuthError {
         field: &'static str,
     },
 
+    /// The requested account does not exist in the vault.
+    #[error("account not found in vault: {0}")]
+    AccountNotFound(String),
+
+    /// An account with the same identifier already exists in the vault.
+    #[error("account already exists in vault: {0}")]
+    AccountExists(String),
+
+    /// I/O error reading/writing the vault.
+    #[error("vault I/O error: {0}")]
+    Io(String),
+
     /// No authentication credential is configured.
     #[error("no authentication configured (need apiKey or oauthToken)")]
     NoAuthConfigured,
