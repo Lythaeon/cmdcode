@@ -4,6 +4,31 @@ All notable changes to cmdcode are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-08-22
+
+### Added
+- **Per-key rate limiting** — configurable request caps per API key with a sliding
+  window. Supports in-memory (default) and Redis backends for distributed
+  deployments. Set via `COMMAND_CODE_PROXY_MAX_REQUESTS` and
+  `COMMAND_CODE_PROXY_RATE_LIMIT_WINDOW`.
+- **`cmdcode setup`** — new command to configure client harnesses (OpenCode,
+  Codex, Hermes, LiteLLM, Ollama, vLLM, Open WebUI) to route through the
+  proxy. Supports `--dry-run` and `--force`.
+- **`SensitiveString`** — new zeroizing credential type that auto-redacts on
+  drop and in Display. Used for all API keys and tokens.
+- **New fuzz targets** — `fuzz_environment`, `fuzz_harness_types`,
+  `fuzz_rate_limit_backend`, `fuzz_sensitive_string` added to the CI fuzz
+  regression suite.
+
+### Fixed
+- **Integration concurrency test** — `test_concurrent_100_requests` now uses a
+  shared `reqwest` client instead of spawning 100 separate ones, eliminating
+  spurious failures from fd exhaustion and TIME_WAIT slots.
+- Minor audit findings and code quality improvements across auth, config,
+  and handler modules.
+
+**Compare**: https://github.com/Lythaeon/cmdcode/compare/v0.2.0...v0.3.0
+
 ## [0.2.0] - 2026-08-21
 
 CLI subcommand refactor, streaming robustness fixes, and a security-hardening
