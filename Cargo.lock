@@ -393,6 +393,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmdcode-mcp"
+version = "0.3.0"
+dependencies = [
+ "cmdcode-core",
+ "dirs",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "cmdcode-server"
 version = "0.3.0"
 dependencies = [

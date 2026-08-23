@@ -3,7 +3,7 @@ resolver = "3"
 members = [
     "crates/cmdcode-core",
     "crates/cmdcode-server",
-    "crates/cmdcode-cli",
+    "crates/cmdcode-cli", "crates/cmdcode-mcp",
 ]
 exclude = ["crates/cmdcode-core/fuzz"]
 
