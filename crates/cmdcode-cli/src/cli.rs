@@ -42,10 +42,10 @@ pub enum Commands {
     )]
     Config,
 
-    /// Show authentication status
+    /// Manage accounts and authentication (interactive TUI)
     #[command(
-        about = "Show authentication credential status",
-        long_about = "Display the current authentication method (API key or OAuth), credential\npresence, and related metadata. Reads from the command-code CLI's auth\ndirectory (~/.commandcode/ or COMMAND_CODE_AUTH_DIR).\n\nDoes NOT display actual credential values for security."
+        about = "Interactive account manager: list, use, logout, add accounts",
+        long_about = "Open an interactive TUI to manage Command Code accounts.\n\n• Sign in a new account (Studio callback or paste API key)\n• Switch which account the proxy uses as the active credential\n• Remove one or more stored accounts\n• Toggle auto-rotate (switch accounts on credit/rate-limit errors)\n\nCredentials are stored in ~/.cmdcode/accounts.json.\nThe proxy reads the active account and picks up changes without restart.\n\nAlso works non-interactively for scripting: the TUI handles everything."
     )]
     Auth,
 

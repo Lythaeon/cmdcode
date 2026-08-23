@@ -66,6 +66,12 @@ impl UpstreamClient {
         }
     }
 
+    /// Whether taste learning is enabled in the proxy config.
+    async fn taste_enabled(&self) -> bool {
+        let config = self.auth.get_config().await;
+        config.taste_learning.unwrap_or(true)
+    }
+
     /// Forward a chat completion request to the upstream API with retries.
     #[allow(clippy::expect_used)]
     pub async fn forward_request(
@@ -106,6 +112,15 @@ impl UpstreamClient {
         let params_obj = params.as_object_mut().expect("params is an object");
 
         if let Some(system) = extract_system(&body.messages) {
+            // Prepend taste content if taste learning is enabled.
+            let system = if self.taste_enabled().await {
+                match read_taste_content(&self.config.auth_dir, &cwd).await {
+                    Some(taste) => format!("{taste}\n\n{system}"),
+                    None => system,
+                }
+            } else {
+                system
+            };
             params_obj.insert("system".into(), serde_json::Value::String(system));
         }
         if let Some(t) = body.temperature {
@@ -876,10 +891,149 @@ fn extract_system(messages: &[cmdcode_core::wire_format::OpenAiMessage]) -> Opti
     None
 }
 
+/// Read taste content from global and project-local taste files, mirroring
+/// the CLI's `getTasteContent` + `renderTasteSection2`.
+async fn read_taste_content(auth_dir: &std::path::Path, cwd: &str) -> Option<String> {
+    let global_path = auth_dir.join("taste").join("taste.md");
+    let local_path = std::path::Path::new(cwd)
+        .join(".commandcode")
+        .join("taste")
+        .join("taste.md");
+
+    let mut parts = Vec::new();
+    for path in [&global_path, &local_path] {
+        if path.exists() {
+            if let Ok(content) = tokio::fs::read_to_string(path).await {
+                let trimmed = content.trim();
+                // Skip header-only files (just markdown headers, no real content).
+                if !is_header_only(trimmed) {
+                    parts.push(trimmed.to_string());
+                }
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    let raw = parts.join("\n\n");
+    Some(format!(
+        "<taste>\n\
+         Below is the complete content of the .commandcode/taste/taste.md file.\n\
+         This shows you what preferences are available and which categories might have\n\
+         additional details in separate files.\n\
+         If you see references like \"See [category/taste.md]\", you MUST read that file\n\
+         using read_file to get the full preferences.\n\
+         \n\
+         --- Content of .commandcode/taste/taste.md ---\n\
+         \n\
+         {raw}\n\
+         \n\
+         --- End of .commandcode/taste/taste.md ---\n\
+         </taste>"
+    ))
+}
+
+/// Check if a taste file contains only markdown headers (no real content).
+/// The CLI skips such files via `isHeaderOnly`.
+fn is_header_only(content: &str) -> bool {
+    content.lines().all(|line| {
+        let trimmed = line.trim();
+        trimmed.is_empty() || trimmed.starts_with('#')
+    })
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
+    // --- Taste helpers ---
+
+    #[test]
+    fn test_is_header_only_true() {
+        assert!(is_header_only("# heading\n## subheading\n"));
+        assert!(is_header_only(""));
+    }
+
+    #[test]
+    fn test_is_header_only_false() {
+        assert!(!is_header_only("# heading\nsome real content\n"));
+        assert!(!is_header_only("  actual text  "));
+    }
+
+    #[tokio::test]
+    async fn test_read_taste_content_global() {
+        let tmp = TempDir::new().unwrap();
+        let taste_dir = tmp.path().join("taste");
+        std::fs::create_dir_all(&taste_dir).unwrap();
+        std::fs::write(
+            taste_dir.join("taste.md"),
+            "# heading\nPrefer 2-space indent",
+        )
+        .unwrap();
+
+        let result = read_taste_content(tmp.path(), "/nonexistent").await;
+        let content = result.expect("should return taste content");
+        assert!(
+            content.contains("Prefer 2-space indent"),
+            "taste content must be present: {content}"
+        );
+        assert!(
+            content.starts_with("<taste>"),
+            "must be wrapped in <taste> tags"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_taste_content_project_local() {
+        let tmp = TempDir::new().unwrap();
+        let project = tmp.path().join("myproject");
+        let taste_dir = project.join(".commandcode").join("taste");
+        std::fs::create_dir_all(&taste_dir).unwrap();
+        std::fs::write(taste_dir.join("taste.md"), "Use 4 spaces").unwrap();
+
+        let result = read_taste_content(tmp.path(), project.to_str().unwrap()).await;
+        let content = result.unwrap();
+        assert!(content.contains("Use 4 spaces"));
+    }
+
+    #[tokio::test]
+    async fn test_read_taste_content_none_when_missing() {
+        let tmp = TempDir::new().unwrap();
+        let result = read_taste_content(tmp.path(), "/nonexistent").await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_read_taste_content_header_only_skipped() {
+        let tmp = TempDir::new().unwrap();
+        let taste_dir = tmp.path().join("taste");
+        std::fs::create_dir_all(&taste_dir).unwrap();
+        std::fs::write(taste_dir.join("taste.md"), "# only a header\n\n").unwrap();
+        let result = read_taste_content(tmp.path(), "/nonexistent").await;
+        assert!(result.is_none(), "header-only file should be skipped");
+    }
+
+    #[tokio::test]
+    async fn test_read_taste_content_global_and_local_concat() {
+        let tmp = TempDir::new().unwrap();
+        let taste_dir = tmp.path().join("taste");
+        std::fs::create_dir_all(&taste_dir).unwrap();
+        std::fs::write(taste_dir.join("taste.md"), "Global preferences").unwrap();
+
+        let project = tmp.path().join("proj");
+        let local = project.join(".commandcode").join("taste");
+        std::fs::create_dir_all(&local).unwrap();
+        std::fs::write(local.join("taste.md"), "Project-specific").unwrap();
+
+        let result = read_taste_content(tmp.path(), project.to_str().unwrap()).await;
+        let content = result.unwrap();
+        assert!(content.contains("Global preferences"));
+        assert!(content.contains("Project-specific"));
+    }
 
     fn state<'a>(completion_id: &'a str, model: &'a str) -> StreamState<'a> {
         StreamState {
