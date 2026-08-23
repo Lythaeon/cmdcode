@@ -110,6 +110,40 @@ a restart. When auto-rotate is enabled and the upstream returns 401/403/429
 (credit exhausted / rate limit), the proxy rotates to the next account and
 retries the request.
 
+## Taste MCP Server
+
+A standalone MCP server (`cmdcode-mcp`) exposes the `taste` tool for agents,
+replicating command-code's built-in taste learning — fully decoupled from the
+command-code CLI.
+
+Add to your opencode config (`~/.config/opencode/opencode.json`):
+
+```jsonc
+{
+  "mcp": {
+    "cmdcode-taste": {
+      "type": "local",
+      "command": ["/path/to/cmdcode-mcp"],
+      "enabled": true
+    }
+  }
+}
+```
+
+The server reads `~/.commandcode/taste/taste.md` and calls the upstream API
+(free — no credit cost) to analyze instructions. Results are written back
+to the same taste files. Agents call the `taste` tool the same way they
+would in command-code.
+
+**Usage:**
+```bash
+# Build
+cargo build --release -p cmdcode-mcp
+
+# Test MCP handshake
+echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1.0"}},"id":1}' | ./target/release/cmdcode-mcp
+```
+
 ## Features
 
 - **OpenAI-compatible** — `/v1/chat/completions` (stream + non-stream)
