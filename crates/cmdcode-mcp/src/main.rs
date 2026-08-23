@@ -367,6 +367,15 @@ async fn main() {
                     "notifications/initialized" => {
                         // Acknowledgment — no response needed
                     }
+                    "ping" => {
+                        write_jsonrpc(id, json!({}));
+                    }
+                    "notifications/cancelled" | "notifications/progress" => {
+                        // Acknowledgment — no response needed
+                    }
+                    "resources/list" => {
+                        write_jsonrpc(id, json!({"resources": []}));
+                    }
                     "tools/list" => {
                         write_jsonrpc(id, json!({"tools": [taste_tool_schema()]}));
                     }
