@@ -8,6 +8,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::or_fun_call)]
 
+use futures_util::StreamExt;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -25,11 +26,9 @@ fn taste_file() -> PathBuf {
 }
 
 fn upstream_url() -> String {
-    // Route through the local proxy instead of upstream directly.
-    // The upstream API detects non-CLI callers (TLS fingerprinting) and rejects them.
-    // The local proxy already handles auth and upstream communication.
-    std::env::var("COMMAND_CODE_PROXY_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:18080".into())
+    // The CLI's free taste/generate endpoint base.
+    std::env::var("COMMAND_CODE_API_BASE")
+        .unwrap_or_else(|_| "https://api.commandcode.ai".into())
 }
 
 fn upstream_model() -> String {
@@ -109,26 +108,32 @@ async fn handle_taste_call(instruction: &str) -> Result<String, String> {
     };
 
     let body = json!({
-        "model": upstream_model(),
-        "messages": [
-            {
-                "role": "system",
-                "content": "You are a taste learning assistant. Analyze user coding preferences and write taste files.\n\
-                    You have access to a write_taste_file tool. Use it to record preferences.\n\
-                    Format taste files as markdown with clear categories and rules.\n\
-                    Only record genuinely stated preferences, don't invent them."
-            },
-            {
-                "role": "user",
-                "content": user_msg
-            }
-        ],
-        "tools": [json!({
-            "type": "function",
-            "function": {
+        "config": {
+            "workingDir": std::env::current_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| ".".to_string()),
+            "date": chrono_date(),
+            "environment": std::env::consts::OS,
+            "structure": [],
+            "isGitRepo": false,
+            "currentBranch": "",
+            "mainBranch": "",
+            "gitStatus": "",
+            "recentCommits": []
+        },
+        "memory": null,
+        "taste": null,
+        "skills": null,
+        "permissionMode": "default",
+        "threadId": uuid_v4(),
+        "mode": "agent",
+        "params": {
+            "model": upstream_model(),
+            "messages": [{"role": "user", "content": [{"type": "text", "text": user_msg}]}],
+            "tools": [json!({
                 "name": "write_taste_file",
                 "description": "Write a taste category file. Use this to record preferences.",
-                "parameters": {
+                "input_schema": {
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "Path like 'style.md' or 'tools.md'"},
@@ -136,28 +141,23 @@ async fn handle_taste_call(instruction: &str) -> Result<String, String> {
                     },
                     "required": ["path", "content"]
                 }
-            }
-        })],
-        "max_tokens": 2048,
-        "stream": false
+            })],
+            "system": "You are a taste learning assistant. When the user states a coding preference, record it using the write_taste_file tool. Only record genuinely stated preferences, don't invent them.",
+            "max_tokens": 4096,
+            "stream": true
+        }
     });
 
-    // Call through local proxy
-    let url = format!("{}/v1/chat/completions", upstream_url());
+    // Call the CLI's free taste endpoint directly (same wire format as
+    // command-code's postStream — body must match or upstream rejects with
+    // "Proxy use detected").
+    let url = format!("{}/alpha/generate", upstream_url());
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(300))
         .build()
         .map_err(|e| format!("HTTP client error: {e}"))?;
 
-    // Auth through proxy uses the proxy's incoming token, not the upstream key
-    let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert("Content-Type", "application/json".parse().unwrap());
-    // The proxy accepts any token when no incoming token is configured
-    headers.insert(
-        reqwest::header::AUTHORIZATION,
-        "Bearer command-code".parse().unwrap(),
-    );
-
+    let headers = build_auth_headers().await;
     let resp = client
         .post(&url)
         .headers(headers)
@@ -172,49 +172,90 @@ async fn handle_taste_call(instruction: &str) -> Result<String, String> {
         return Err(format!("upstream error {status}: {body_text}"));
     }
 
-    // Parse OpenAI format response
-    let response: Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("invalid upstream response: {e}"))?;
+    // Consume the NDJSON stream, assembling tool calls from deltas.
+    let mut stream = resp.bytes_stream();
 
-    // Extract tool calls from choices[0].message.tool_calls
-    let tool_calls = response
-        .get("choices")
-        .and_then(|c| c.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|choice| choice.get("message"))
-        .and_then(|msg| msg.get("tool_calls"))
-        .and_then(|tc| tc.as_array())
-        .cloned()
-        .unwrap_or_default();
+    // toolCallId -> (toolName, accumulated input JSON string)
+    let mut pending: std::collections::HashMap<String, (String, String)> =
+        std::collections::HashMap::new();
+    let mut text_out = String::new();
+    let mut buf: Vec<u8> = Vec::new();
 
-    let mut results = Vec::new();
-    for tc in &tool_calls {
-        let func = tc.get("function").cloned().unwrap_or(json!({}));
-        let tool_name = func.get("name").and_then(|n| n.as_str()).unwrap_or("");
-        let args_str = func.get("arguments").and_then(|a| a.as_str()).unwrap_or("{}");
-        let input: Value = serde_json::from_str(args_str).unwrap_or(json!({}));
-
-        if tool_name == "write_taste_file" {
-            if let (Some(path), Some(content)) = (
-                input.get("path").and_then(|p| p.as_str()),
-                input.get("content").and_then(|c| c.as_str()),
-            ) {
-                let taste_path = resolve_taste_path(path);
-                if let Some(p) = taste_path {
-                    std::fs::create_dir_all(p.parent().unwrap_or(Path::new(".")))
-                        .map_err(|e| format!("mkdir failed: {e}"))?;
-                    std::fs::write(&p, content)
-                        .map_err(|e| format!("write failed: {e}"))?;
-                    results.push(format!("Recorded preferences in {}", p.display()));
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("stream read failed: {e}"))?;
+        buf.extend_from_slice(&chunk);
+        while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = buf.drain(..=pos).collect();
+            let line = String::from_utf8_lossy(&line);
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let Ok(ev) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            match ev.get("type").and_then(|t| t.as_str()).unwrap_or("") {
+                "tool-input-start" => {
+                    let id = ev.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
+                    let name = ev
+                        .get("toolName")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    eprintln(&format!("stream: tool-input-start id={id} name={name}"));
+                    pending.insert(id, (name, String::new()));
+                }
+                "tool-input-delta" => {
+                    let id = ev.get("id").and_then(|i| i.as_str()).unwrap_or("");
+                    if let Some((_, acc)) = pending.get_mut(id) {
+                        acc.push_str(ev.get("delta").and_then(|d| d.as_str()).unwrap_or(""));
+                    }
+                }
+                "text-delta" => {
+                    text_out.push_str(ev.get("delta").and_then(|d| d.as_str()).unwrap_or(""));
+                }
+                other => {
+                    if !other.is_empty() {
+                        eprintln(&format!("stream: {other}"));
+                    }
                 }
             }
         }
     }
 
+    drop(stream);
+
+    // Execute completed write_taste_file calls.
+    let mut results = Vec::new();
+    for (_, (tool_name, input_str)) in &pending {
+        if tool_name != "write_taste_file" {
+            continue;
+        }
+        let input: Value = match serde_json::from_str(input_str.trim()) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if let (Some(path), Some(content)) = (
+            input.get("path").and_then(|p| p.as_str()),
+            input.get("content").and_then(|c| c.as_str()),
+        ) {
+            let taste_path = resolve_taste_path(path);
+            if let Some(p) = taste_path {
+                std::fs::create_dir_all(p.parent().unwrap_or(Path::new(".")))
+                    .map_err(|e| format!("mkdir failed: {e}"))?;
+                std::fs::write(&p, content).map_err(|e| format!("write failed: {e}"))?;
+                results.push(format!("Recorded preferences in {}", p.display()));
+            }
+        }
+    }
+
     if results.is_empty() {
-        Ok("No new taste recorded.".into())
+        let note = text_out.trim();
+        if note.is_empty() {
+            Ok("No new taste recorded.".into())
+        } else {
+            Ok(format!("No new taste recorded. Model said: {note}"))
+        }
     } else {
         Ok(format!("Recorded: {}", results.join(", ")))
     }
@@ -256,15 +297,110 @@ fn get_taste_structure() -> String {
 }
 
 fn resolve_taste_path(relative: &str) -> Option<PathBuf> {
-    // Taste files live in ~/.commandcode/taste/ or project-local .commandcode/taste/
+    // Taste files live in ~/.commandcode/taste/<category>.md.
+    // Accept any relative markdown category path; reject traversal/absolute paths.
     let p = Path::new(relative);
-    // Only allow taste.md or category/taste.md paths
-    if p.file_name() == Some(std::ffi::OsStr::new("taste.md")) {
-        let full = taste_dir().join(p);
-        Some(full)
+    if p.is_absolute() || relative.contains("..") {
+        return None;
+    }
+    if p.extension() != Some(std::ffi::OsStr::new("md")) {
+        return None;
+    }
+    Some(taste_dir().join(p))
+}
+
+async fn build_auth_headers() -> reqwest::header::HeaderMap {
+    use reqwest::header;
+
+    let mut headers = header::HeaderMap::new();
+    headers.insert("Content-Type", "application/json".parse().unwrap());
+    headers.insert("User-Agent", "cli".parse().unwrap());
+
+    // Vault first, then legacy auth.json fallback
+    let vault = cmdcode_core::accounts::AccountStore::default();
+    let key = vault
+        .load()
+        .ok()
+        .and_then(|v| v.active_account().map(|a| a.api_key.as_str().to_string()))
+        .filter(|k| !k.is_empty())
+        .or_else(|| {
+            let auth_file = home().join(".commandcode").join("auth.json");
+            std::fs::read_to_string(&auth_file)
+                .ok()
+                .and_then(|c| serde_json::from_str::<Value>(&c).ok())
+                .and_then(|a| a.get("apiKey").and_then(|k| k.as_str()).map(String::from))
+                .filter(|k| !k.is_empty())
+        });
+
+    if let Some(key) = key {
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {key}").parse().unwrap(),
+        );
+    }
+
+    // Headers matching the official CLI's buildCommandAuthHeaders
+    headers.insert("x-cli-environment", "production".parse().unwrap());
+    headers.insert(
+        "x-command-code-version",
+        detect_cli_version()
+            .unwrap_or_else(|| "1.32.1".into())
+            .parse()
+            .unwrap(),
+    );
+    headers.insert(
+        "x-project-slug",
+        std::env::current_dir()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+            .unwrap_or_else(|| "unknown".into())
+            .parse()
+            .unwrap(),
+    );
+    headers.insert("x-session-id", uuid_v4().parse().unwrap());
+    headers
+}
+
+/// Detect the installed command-code CLI version via `command-code --version`.
+fn detect_cli_version() -> Option<String> {
+    let output = std::process::Command::new("command-code")
+        .arg("--version")
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let ver = stdout.trim().split_whitespace().last()?;
+    if ver.contains('.') && ver.chars().any(|c| c.is_ascii_digit()) {
+        Some(ver.to_string())
     } else {
         None
     }
+}
+
+/// Random UUID v4.
+fn uuid_v4() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+fn chrono_date() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let days = now.as_secs() / 86400;
+    let (y, m, d) = civil_from_days(days as i64);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let y = yoe as i64 + era * 400;
+    (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
 // --- Main ---

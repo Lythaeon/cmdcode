@@ -398,11 +398,13 @@ version = "0.3.0"
 dependencies = [
  "cmdcode-core",
  "dirs",
+ "futures-util",
  "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
