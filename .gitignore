@@ -13,3 +13,4 @@ crates/cmdcode-core/fuzz/corpus/
 .ptt.json
 cmdcode/
 coverage/
+.commandcode/
