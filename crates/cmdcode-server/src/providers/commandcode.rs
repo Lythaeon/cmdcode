@@ -51,7 +51,9 @@ impl Provider for CommandCodeProvider {
             "max_tokens": max_tokens,
             "stream": true,
         });
-        let params_obj = params.as_object_mut().expect("params is an object");
+        let Some(params_obj) = params.as_object_mut() else {
+            return params;
+        };
 
         if let Some(system) = extract_system(&ctx.body.messages) {
             // Prepend the taste section if provided (taste learning enabled).

@@ -530,7 +530,7 @@ fn detect_cli_version() -> Option<String> {
         .output()
         .ok()?;
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let ver = stdout.trim().split_whitespace().last()?;
+    let ver = stdout.split_whitespace().last()?;
     if ver.contains('.') && ver.chars().any(|c| c.is_ascii_digit()) {
         Some(ver.to_string())
     } else {

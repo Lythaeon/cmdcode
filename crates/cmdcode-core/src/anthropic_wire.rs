@@ -11,17 +11,28 @@ use crate::wire_format::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-/// Content block in an Anthropic message.
+/// Content block in an Anthropic message. Only the shapes we transform are
+/// strongly typed; everything else round-trips as raw JSON.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum AnthropicBlock {
+    /// Structured block with a `type` discriminator.
+    Typed(TypedBlock),
+    /// Any unrecognized block, preserved verbatim.
+    Raw(Value),
+}
+
+/// Strongly-typed Anthropic content blocks.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type")]
-pub enum AnthropicBlock {
+pub enum TypedBlock {
     /// Plain text.
     #[serde(rename = "text")]
     Text {
         /// The text content.
         text: String,
     },
-    /// Image (passed through as-is on conversion).
+    /// Image (passed through structurally on conversion).
     #[serde(rename = "image")]
     Image {
         /// Remaining image fields (source etc.), passed through raw.
@@ -37,24 +48,26 @@ pub enum AnthropicBlock {
         #[serde(default)]
         content: Value,
     },
-    /// Catch-all for unknown blocks (thinking, etc.) — preserved raw.
-    #[serde(untagged)]
-    Other(Value),
 }
 
 /// One Anthropic message; `content` is a string or a block array.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AnthropicMessage {
+    /// `user`, `assistant`, or (rare) `system`.
     pub role: String,
+    /// String content or an array of typed blocks.
     pub content: Value,
 }
 
 /// Flat Anthropic tool definition.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AnthropicTool {
+    /// Tool name the model will call.
     pub name: String,
+    /// What the tool does.
     #[serde(default)]
     pub description: Option<String>,
+    /// JSON Schema for the tool input.
     #[serde(default)]
     pub input_schema: Value,
 }
@@ -62,23 +75,31 @@ pub struct AnthropicTool {
 /// Incoming `/v1/messages` request body.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AnthropicRequest {
+    /// Requested model id.
     pub model: String,
     /// Required by Anthropic; forwarded as max_tokens.
     pub max_tokens: u64,
     /// Top-level system prompt (string or text-block array).
     #[serde(default)]
     pub system: Option<Value>,
+    /// Conversation messages in order.
     pub messages: Vec<AnthropicMessage>,
+    /// Tools available to the model.
     #[serde(default)]
     pub tools: Option<Vec<AnthropicTool>>,
+    /// Sampling temperature.
     #[serde(default)]
     pub temperature: Option<f64>,
+    /// Nucleus sampling threshold.
     #[serde(default)]
     pub top_p: Option<f64>,
+    /// Stop sequences.
     #[serde(default)]
     pub stop_sequences: Option<Vec<String>>,
+    /// Whether to stream the response as SSE events.
     #[serde(default)]
     pub stream: Option<bool>,
+    /// Request metadata (e.g. user id).
     #[serde(default)]
     pub metadata: Option<Value>,
 }
@@ -194,7 +215,7 @@ impl AnthropicRequest {
                             }
                             Some("tool_use") => {
                                 let args = serde_json::to_string(
-                                    &block.get("input").cloned().unwrap_or(json!({})),
+                                    &block.get("input").cloned().unwrap_or_else(|| json!({})),
                                 )
                                 .unwrap_or_default();
                                 tool_calls.push(OpenAiToolCall {
@@ -320,11 +341,11 @@ pub fn completion_to_anthropic(openai: &Value, model: &str) -> Value {
                 .pointer("/function/arguments")
                 .and_then(|a| a.as_str())
                 .unwrap_or("{}");
-            let input: Value = serde_json::from_str(args_str).unwrap_or(json!({}));
+            let input: Value = serde_json::from_str(args_str).unwrap_or_else(|_| json!({}));
             content.push(json!({
                 "type": "tool_use",
-                "id": call.get("id").cloned().unwrap_or(json!("call_unknown")),
-                "name": call.pointer("/function/name").cloned().unwrap_or(json!("")),
+                "id": call.get("id").cloned().unwrap_or_else(|| json!("call_unknown")),
+                "name": call.pointer("/function/name").cloned().unwrap_or_else(|| json!("")),
                 "input": input,
             }));
         }
@@ -458,7 +479,7 @@ impl AnthropicStreamRenderer {
                         ))),
                         "type": "message",
                         "role": "assistant",
-                        "model": chunk.get("model").cloned().unwrap_or(json!("")),
+                        "model": chunk.get("model").cloned().unwrap_or_else(|| json!("")),
                         "content": [],
                         "stop_reason": Value::Null,
                         "usage": {"input_tokens": 0, "output_tokens": 0},
@@ -497,7 +518,9 @@ impl AnthropicStreamRenderer {
                             }),
                         ));
                     }
-                    let (index, _) = self.open_block.expect("just opened");
+                    let Some((index, _)) = self.open_block else {
+                        return out;
+                    };
                     out.push(Self::frame(
                         "content_block_delta",
                         json!({
@@ -528,7 +551,9 @@ impl AnthropicStreamRenderer {
                             }),
                         ));
                     }
-                    let (index, _) = self.open_block.expect("just opened");
+                    let Some((index, _)) = self.open_block else {
+                        return out;
+                    };
                     out.push(Self::frame(
                         "content_block_delta",
                         json!({
@@ -609,6 +634,7 @@ impl AnthropicStreamRenderer {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

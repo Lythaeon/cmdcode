@@ -613,9 +613,10 @@ async fn test_concurrent_mixed_methods() {
 
     let mut success = 0;
     for h in handles {
-        match h.await.unwrap() {
-            1 => success += 1,
-            _ => {}
+        if h.await.unwrap() == 1 {
+
+            success += 1;
+
         }
     }
 

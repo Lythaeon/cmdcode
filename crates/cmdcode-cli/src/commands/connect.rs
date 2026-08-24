@@ -38,10 +38,9 @@ pub fn tui() {
         }
 
         // Provider table.
-        let providers = cfg
-            .get("providers")
-            .and_then(|p| p.as_object())
-            .expect("checked non-empty");
+        let Some(providers) = cfg.get("providers").and_then(|p| p.as_object()) else {
+            continue;
+        };
         println!(
             "Providers ({}):",
             providers.len()

@@ -265,7 +265,7 @@ impl HarnessConfig {
                 .ok()
                 .map(|p| {
                     p.parent()
-                        .unwrap_or(std::path::Path::new("."))
+                        .unwrap_or_else(|| std::path::Path::new("."))
                         .join("cmdcode-mcp")
                         .display()
                         .to_string()
@@ -471,7 +471,7 @@ fn setup_opencode(config: &HarnessConfig, force: bool) -> Result<PathBuf, String
                 let existing_provider = existing
                     .get("provider")
                     .cloned()
-                    .unwrap_or(serde_json::json!({}));
+                    .unwrap_or_else(|| serde_json::json!({}));
                 let merged = deep_merge(existing_provider, new_provider.clone());
                 existing["provider"] = merged;
             }
@@ -487,7 +487,7 @@ fn setup_opencode(config: &HarnessConfig, force: bool) -> Result<PathBuf, String
                     let existing_mcp = existing
                         .get("mcp")
                         .cloned()
-                        .unwrap_or(serde_json::json!({}));
+                        .unwrap_or_else(|| serde_json::json!({}));
                     if let Some(base_obj) = existing_mcp.as_object() {
                         let mut merged = base_obj.clone();
                         for (k, v) in overlay_obj {
@@ -675,6 +675,7 @@ fn setup_openwebui(config: &HarnessConfig, force: bool) -> Result<PathBuf, Strin
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

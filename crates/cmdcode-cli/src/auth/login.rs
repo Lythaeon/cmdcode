@@ -353,7 +353,7 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -369,7 +369,7 @@ mod tests {
         let port = find_available_port();
         assert!(port.is_some(), "should find a free port");
         let p = port.unwrap();
-        assert!(p >= START_PORT && p < START_PORT + MAX_PORT_ATTEMPTS);
+        assert!((START_PORT..START_PORT + MAX_PORT_ATTEMPTS).contains(&p));
     }
 
     #[test]
@@ -410,7 +410,7 @@ mod tests {
 /// Integration-style tests that exercise the callback and manual paths
 /// against in-process mock servers.
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod integration_tests {
     use super::*;
     use std::io::{Read, Write};
