@@ -8,23 +8,29 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
+/// Cached CLI version — spawning `command-code --version` costs ~600ms
+/// (Node CLI), so this must run at most once per process, not per request.
+static CLI_VERSION: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
 /// Detect the installed command-code CLI version by running `command-code --version`.
 /// Returns None if the CLI is not installed or the version cannot be parsed.
 fn detect_cli_version() -> Option<String> {
-    let output = std::process::Command::new("command-code")
-        .arg("--version")
-        .output()
-        .ok()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let version = stdout.trim();
-    // Parse "1.32.1" from "1.32.1" or "command-code 1.32.1" etc.
-    let ver = version.split_whitespace().last()?;
-    // Validate it looks like a version
-    if ver.chars().any(|c| c.is_ascii_digit() || c == '.') && ver.contains('.') {
-        Some(ver.to_string())
-    } else {
-        None
-    }
+    CLI_VERSION
+        .get_or_init(|| {
+            let output = std::process::Command::new("command-code")
+                .arg("--version")
+                .output()
+                .ok()?;
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // Parse "1.32.1" from "1.32.1" or "command-code 1.32.1" etc.
+            let ver = stdout.split_whitespace().last()?;
+            if ver.chars().any(|c| c.is_ascii_digit() || c == '.') && ver.contains('.') {
+                Some(ver.to_string())
+            } else {
+                None
+            }
+        })
+        .clone()
 }
 
 /// Raw auth file contents.

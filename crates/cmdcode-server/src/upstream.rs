@@ -109,6 +109,12 @@ impl UpstreamClient {
         // Pick up providers.json edits without a restart.
         self.router.reload_if_changed().await;
         let router = self.router.get().await;
+        if router.all_disabled {
+            return Err(UpstreamError::HttpError {
+                status: 503,
+                body: "all providers are disabled".into(),
+            });
+        }
         let provider = router.resolve(model.as_str()).clone();
 
         let mut headers = provider.headers(&self.auth, &cwd).await?;

@@ -524,18 +524,25 @@ async fn build_auth_headers() -> reqwest::header::HeaderMap {
 }
 
 /// Detect the installed command-code CLI version via `command-code --version`.
+/// Cached CLI version — the subprocess spawn is expensive (~600ms for a
+/// Node CLI), so detect at most once per process.
 fn detect_cli_version() -> Option<String> {
-    let output = std::process::Command::new("command-code")
-        .arg("--version")
-        .output()
-        .ok()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let ver = stdout.split_whitespace().last()?;
-    if ver.contains('.') && ver.chars().any(|c| c.is_ascii_digit()) {
-        Some(ver.to_string())
-    } else {
-        None
-    }
+    static CLI_VERSION: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    CLI_VERSION
+        .get_or_init(|| {
+            let output = std::process::Command::new("command-code")
+                .arg("--version")
+                .output()
+                .ok()?;
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let ver = stdout.split_whitespace().last()?;
+            if ver.contains('.') && ver.chars().any(|c| c.is_ascii_digit()) {
+                Some(ver.to_string())
+            } else {
+                None
+            }
+        })
+        .clone()
 }
 
 /// Random UUID v4.

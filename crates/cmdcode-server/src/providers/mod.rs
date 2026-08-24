@@ -146,6 +146,8 @@ pub struct ProviderRouter {
     pub by_model: std::collections::HashMap<String, Arc<dyn Provider>>,
     /// Aggregated model list across all providers (`/v1/models`).
     pub models: Vec<serde_json::Value>,
+    /// True when every declared entry was disabled — requests get a fast 503.
+    pub all_disabled: bool,
     /// Config file path this router was built from (for hot reload), when
     /// a declarative config was used.
     pub source_path: Option<std::path::PathBuf>,
@@ -197,9 +199,49 @@ impl RouterHandle {
         if mtime == current.source_mtime {
             return;
         }
-        let fresh = ProviderRouter::from_env(&self.config, self.auth.clone());
-        *self.inner.write().await = Arc::new(fresh);
-        tracing::info!(path = %path.display(), "providers config reloaded");
+        // A broken/missing file must NOT degrade to the env fallback here:
+        // retain the last-good router so traffic keeps flowing.
+        match ProviderRouter::try_build_declared(&self.config, self.auth.clone()) {
+            Ok(Some(fresh)) => {
+                *self.inner.write().await = Arc::new(fresh);
+                tracing::info!(path = %path.display(), "providers config reloaded");
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    "providers config removed; keeping last-good router"
+                );
+                // Refresh cached mtime so we don't re-parse every request.
+                let mut guard = self.inner.write().await;
+                let cloned = ProviderRouter {
+                    default: guard.default.clone(),
+                    by_model: guard.by_model.clone(),
+                    models: guard.models.clone(),
+                    all_disabled: guard.all_disabled,
+                    source_path: guard.source_path.clone(),
+                    source_mtime: mtime,
+                };
+                *guard = Arc::new(cloned);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "providers config reload failed; keeping last-good router"
+                );
+                // Refresh cached mtime to avoid re-parsing each request.
+                let mut guard = self.inner.write().await;
+                let cloned = ProviderRouter {
+                    default: guard.default.clone(),
+                    by_model: guard.by_model.clone(),
+                    models: guard.models.clone(),
+                    all_disabled: guard.all_disabled,
+                    source_path: guard.source_path.clone(),
+                    source_mtime: mtime,
+                };
+                *guard = Arc::new(cloned);
+            }
+        }
     }
 }
 
@@ -235,6 +277,7 @@ impl ProviderRouter {
                 default,
                 by_model: std::collections::HashMap::new(),
                 models: Vec::new(),
+                all_disabled: false,
                 source_path: None,
                 source_mtime: None,
             };
@@ -295,8 +338,84 @@ impl ProviderRouter {
             default,
             by_model,
             models,
+            all_disabled: !enabled_seen && !cfg.providers.is_empty(),
             source_path,
             source_mtime,
+        }
+    }
+
+    /// Build from a declarative providers file, returning Err when the file
+    /// exists but cannot be parsed (used by hot reload to retain the
+    /// last-good router instead of silently degrading). `Ok(None)` when no
+    /// file exists.
+    pub fn try_build_declared(
+        config: &cmdcode_core::config::ProxyConfig,
+        auth: Arc<AuthManager>,
+    ) -> Result<Option<Self>, String> {
+        match cmdcode_core::provider_config::ProvidersConfig::load() {
+            Err(e) => Err(e),
+            Ok(None) => Ok(None),
+            Ok(Some(cfg)) => {
+                let mut by_model = std::collections::HashMap::new();
+                let mut models = Vec::new();
+                let mut default: Option<Arc<dyn Provider>> = None;
+                let source_path = cmdcode_core::provider_config::ProvidersConfig::default_path();
+                let source_mtime = source_path
+                    .as_ref()
+                    .and_then(|p| std::fs::metadata(p).ok())
+                    .and_then(|m| m.modified().ok());
+
+                for (key, entry) in cfg.entries() {
+                    if !entry.is_enabled() {
+                        tracing::info!(provider = %key, "skipping disabled provider");
+                        continue;
+                    }
+                    let provider: Arc<dyn Provider> = match entry.kind() {
+                        cmdcode_core::provider_config::AdapterKind::OpenAi => {
+                            Arc::new(openai::OpenAiProvider {
+                                base_url: entry
+                                    .base_url()
+                                    .unwrap_or_else(|| "http://localhost".into()),
+                                api_key: entry.api_key(),
+                            })
+                        }
+                        cmdcode_core::provider_config::AdapterKind::CommandCode => {
+                            Arc::new(commandcode::CommandCodeProvider {
+                                auth: auth.clone(),
+                                base_url: entry
+                                    .base_url()
+                                    .unwrap_or_else(|| config.upstream_url.clone()),
+                                learning: entry.learning,
+                            })
+                        }
+                    };
+                    if default.is_none() {
+                        default = Some(provider.clone());
+                    }
+                    let display_name = entry.name.clone().unwrap_or_else(|| key.to_string());
+                    for id in entry.models.keys() {
+                        by_model.insert(id.clone(), provider.clone());
+                        models.push(serde_json::json!({
+                            "id": id,
+                            "object": "model",
+                            "created": 0,
+                            "owned_by": display_name,
+                        }));
+                    }
+                }
+
+                let any_enabled = cfg.entries().any(|(_, e)| e.is_enabled());
+                let non_empty = !cfg.providers.is_empty();
+                let default = default.unwrap_or_else(|| Arc::new(NoEnabledProvider));
+                Ok(Some(Self {
+                    default,
+                    by_model,
+                    models,
+                    all_disabled: non_empty && !any_enabled,
+                    source_path,
+                    source_mtime,
+                }))
+            }
         }
     }
 }

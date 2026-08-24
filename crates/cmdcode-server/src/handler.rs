@@ -451,6 +451,41 @@ impl ProxyHttp for CommandCodeProxy {
             }
         };
 
+        // Per-frontend semantic validation that serde defaults can mask.
+        if frontend == Frontend::Gemini
+            && gemini_request
+                .as_ref()
+                .map(|g| g.contents.is_empty())
+                .unwrap_or(true)
+        {
+            self.metrics.inc_bad_requests();
+            self.send_json(
+                session,
+                400,
+                &serde_json::json!({"error": {"code": 400,
+                    "message": "contents must contain at least one message",
+                    "status": "INVALID_ARGUMENT"}}),
+            )
+            .await?;
+            return Ok(true);
+        }
+        if frontend == Frontend::Ollama
+            && ollama_request
+                .as_ref()
+                .map(|o| o.messages.is_empty())
+                .unwrap_or(true)
+        {
+            self.metrics.inc_bad_requests();
+            self.send_json(
+                session,
+                400,
+                &serde_json::json!({"error": format!(
+                    "messages must contain at least one message")}),
+            )
+            .await?;
+            return Ok(true);
+        }
+
         // Responses API server-side state: chain onto a prior response's
         // conversation when previous_response_id is present, and assign our
         // own resp_* id so the client can reference this turn later.
