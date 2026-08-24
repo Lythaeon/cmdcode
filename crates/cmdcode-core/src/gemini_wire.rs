@@ -365,6 +365,10 @@ pub fn completion_to_gemini(openai: &Value, model: &str) -> Value {
 pub struct GeminiStreamRenderer {
     started: bool,
     finished: bool,
+    /// Buffered tool calls: OpenAI emits function arguments as deltas, while
+    /// Gemini expects a complete `functionCall` part — accumulate per index
+    /// and flush on finish.
+    pending_tools: std::collections::BTreeMap<u64, (String, String)>,
 }
 
 impl GeminiStreamRenderer {
@@ -388,7 +392,6 @@ impl GeminiStreamRenderer {
         }
 
         let mut text_parts: Vec<&str> = Vec::new();
-        let mut tool_parts: Vec<Value> = Vec::new();
         let mut finish: Option<&str> = None;
 
         if let Some(choice) = chunk.pointer("/choices/0") {
@@ -400,18 +403,16 @@ impl GeminiStreamRenderer {
                 }
                 if let Some(calls) = delta.get("tool_calls").and_then(|c| c.as_array()) {
                     for call in calls {
+                        let idx = call.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
+                        let entry = self.pending_tools.entry(idx).or_default();
                         if let Some(name) = call.pointer("/function/name").and_then(|n| n.as_str())
                         {
-                            tool_parts.push(json!({
-                                "functionCall": {"name": name, "args": {}},
-                            }));
+                            entry.0.push_str(name);
                         }
                         if let Some(args) =
                             call.pointer("/function/arguments").and_then(|a| a.as_str())
                         {
-                            if !args.is_empty() {
-                                text_parts.push(args);
-                            }
+                            entry.1.push_str(args);
                         }
                     }
                 }
@@ -419,14 +420,20 @@ impl GeminiStreamRenderer {
             finish = choice.get("finish_reason").and_then(|f| f.as_str());
         }
 
-        let mut candidates_meta = json!([]);
-        let _ = &mut candidates_meta;
-
         let mut parts: Vec<Value> = text_parts
             .into_iter()
             .map(|t| json!({"text": t}))
             .collect();
-        parts.extend(tool_parts);
+
+        // On finish, emit accumulated tool calls as complete functionCall
+        // parts (Gemini has no incremental tool-arg representation).
+        if finish.is_some() {
+            for (_, (name, args_str)) in std::mem::take(&mut self.pending_tools) {
+                let args: Value = serde_json::from_str(args_str.trim())
+                    .unwrap_or_else(|_| json!({}));
+                parts.push(json!({"functionCall": {"name": name, "args": args}}));
+            }
+        }
 
         if parts.is_empty() && finish.is_none() {
             // Pure keep-alive chunk (no content change) — skip.
@@ -534,6 +541,37 @@ mod tests {
         assert_eq!(out["candidates"][0]["content"]["parts"][0]["text"], "22C");
         assert_eq!(out["candidates"][0]["finishReason"], "STOP");
         assert_eq!(out["usageMetadata"]["totalTokenCount"], 10);
+    }
+
+    #[test]
+    fn test_stream_renderer_buffers_tool_args() {
+        let mut r = GeminiStreamRenderer::new();
+        let start = json!({"choices":[{"delta":{"tool_calls":[
+            {"index":0,"id":"c1","function":{"name":"get_weather"}}
+        ]},"finish_reason":null}]});
+        assert!(r.feed(&format!("data: {start}")).is_empty());
+
+        let arg1 = json!({"choices":[{"delta":{"tool_calls":[
+            {"index":0,"function":{"arguments":"{\"city\":"}}
+        ]},"finish_reason":null}]});
+        assert!(r.feed(&format!("data: {arg1}")).is_empty());
+
+        let arg2 = json!({"choices":[{"delta":{"tool_calls":[
+            {"index":0,"function":{"arguments":"\"Paris\"}"}}
+        ]},"finish_reason":null}]});
+        assert!(r.feed(&format!("data: {arg2}")).is_empty());
+
+        let fin = json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]});
+        let frames = r.feed(&format!("data: {fin}"));
+        let parsed: Value =
+            serde_json::from_str(frames[0].trim_start_matches("data: ").trim()).unwrap();
+        let call = &parsed["candidates"][0]["content"]["parts"][0]["functionCall"];
+        assert_eq!(call["name"], "get_weather");
+        assert_eq!(call["args"]["city"], "Paris");
+        // Args must NOT leak into text parts.
+        for part in parsed["candidates"][0]["content"]["parts"].as_array().unwrap() {
+            assert!(part.get("text").is_none(), "args leaked as text: {part}");
+        }
     }
 
     #[test]

@@ -508,13 +508,16 @@ async fn build_auth_headers() -> reqwest::header::HeaderMap {
             .unwrap(),
     );
     // CLI slugifies the cwd path (e.g. home-ac-projects-cmdcode)
-    let slug = std::env::current_dir()
+    let slug: String = std::env::current_dir()
         .map(|p| {
             p.display()
                 .to_string()
                 .trim_start_matches('/')
                 .replace(['/', '_'], "-")
                 .to_lowercase()
+                .chars()
+                .filter(|c| !c.is_control())
+                .collect()
         })
         .unwrap_or_else(|_| "unknown".into());
     headers.insert("x-project-slug", slug.parse().unwrap());

@@ -320,10 +320,17 @@ impl AuthManager {
         let config = self.get_config().await;
         let session_id = SessionId::generate();
 
+        // file_name() strips path separators; strip control chars too so a
+        // hostile cwd can't inject CR/LF into header values.
         let project_slug = std::path::Path::new(cwd)
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("unknown");
+            .map(|s| {
+                s.chars()
+                    .filter(|c| !c.is_control())
+                    .collect::<String>()
+            })
+            .unwrap_or_else(|| "unknown".into());
 
         let mut headers = HashMap::new();
         headers.insert("Content-Type".into(), "application/json".into());
@@ -341,7 +348,7 @@ impl AuthManager {
         let cli_env =
             CliEnvironment::from_str_opt(&cli_env_str).unwrap_or(CliEnvironment::Production);
         headers.insert("x-cli-environment".into(), cli_env.as_str().into());
-        headers.insert("x-project-slug".into(), project_slug.into());
+        headers.insert("x-project-slug".into(), project_slug);
         headers.insert(
             "x-taste-learning".into(),
             config.taste_learning.unwrap_or(true).to_string(),

@@ -784,11 +784,38 @@ pub fn extract_system(messages: &[cmdcode_core::wire_format::OpenAiMessage]) -> 
 /// "no preferences learned yet" block, which primes the agent to record
 /// taste during the session.
 pub async fn read_taste_content(auth_dir: &std::path::Path, cwd: &str) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     let global_path = auth_dir.join("taste").join("taste.md");
     let local_path = std::path::Path::new(cwd)
         .join(".commandcode")
         .join("taste")
         .join("taste.md");
+
+    // mtime-based cache: taste files change rarely but are read on every
+    // request. Key = (global mtime secs, local mtime secs); a change in
+    // either invalidates. 0 = missing file.
+    static CACHE_KEY: AtomicU64 = AtomicU64::new(0);
+    static CACHE_VAL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+    async fn mtime_secs(path: &std::path::Path) -> u64 {
+        tokio::fs::metadata(path)
+            .await
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+
+    let g = mtime_secs(&global_path).await;
+    let l = mtime_secs(&local_path).await;
+    let key = (g << 32) | (l & 0xffff_ffff);
+    if key != 0 && CACHE_KEY.load(Ordering::Relaxed) == key {
+        if let Some(cached) = CACHE_VAL.get() {
+            return cached.clone();
+        }
+    }
 
     let mut parts = Vec::new();
     for path in [&global_path, &local_path] {
@@ -808,7 +835,7 @@ pub async fn read_taste_content(auth_dir: &std::path::Path, cwd: &str) -> String
     }
     let raw = parts.join("\n\n");
 
-    format!(
+    let rendered = format!(
         "<taste>\n\
          Below is the complete content of the .commandcode/taste/taste.md file.\n\
          This shows you what preferences are available and which categories might have\n\
@@ -822,7 +849,11 @@ pub async fn read_taste_content(auth_dir: &std::path::Path, cwd: &str) -> String
          \n\
          --- End of .commandcode/taste/taste.md ---\n\
          </taste>"
-    )
+    );
+
+    CACHE_KEY.store(key, Ordering::Relaxed);
+    let _ = CACHE_VAL.set(rendered.clone());
+    rendered
 }
 
 /// Check if a taste file contains only markdown headers (no real content).
