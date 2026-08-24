@@ -78,9 +78,22 @@ pub struct ProviderEntry {
     /// Whether this entry should serve taste learning requests.
     #[serde(default)]
     pub learning: bool,
+    /// Whether this entry is active. Disabled entries serve no traffic;
+    /// toggle at runtime with `cmdcode connect enable/disable`.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl ProviderEntry {
+    /// Whether the entry accepts traffic (absent field defaults to enabled).
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
     /// Resolved adapter kind (default: openai).
     pub fn kind(&self) -> AdapterKind {
         self.adapter

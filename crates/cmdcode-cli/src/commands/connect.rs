@@ -34,11 +34,6 @@ fn save_raw(value: &serde_json::Value) -> Result<(), String> {
         .map_err(|e| format!("write {}: {e}", path.display()))
 }
 
-/// `connect` — default action: list configured providers.
-pub fn run() {
-    list();
-}
-
 /// Show every configured provider, its adapter, base URL and model count.
 pub fn list() {
     let cfg = match load_raw() {
@@ -74,12 +69,17 @@ pub fn list() {
             .get("learning")
             .and_then(|l| l.as_bool())
             .unwrap_or(false);
+        let enabled = entry
+            .get("enabled")
+            .and_then(|e| e.as_bool())
+            .unwrap_or(true);
         tracing::info!(
             provider = %key,
             kind,
             url,
             models = model_count,
             learning,
+            enabled,
             "(declared)"
         );
     }
@@ -329,4 +329,45 @@ fn interpolate_env_str(value: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// Set the `enabled` flag on a provider entry and persist it. Hot reload
+/// applies the change on the next request.
+fn set_enabled(name: &str, enabled: bool) {
+    let mut cfg = match load_raw() {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to load providers config");
+            return;
+        }
+    };
+    let Some(entry) = cfg
+        .get_mut("providers")
+        .and_then(|p| p.as_object_mut())
+        .and_then(|p| p.get_mut(name))
+    else {
+        tracing::warn!(provider = %name, "not found");
+        return;
+    };
+    if !entry.is_object() {
+        tracing::warn!(provider = %name, "entry is not an object");
+        return;
+    }
+    entry["enabled"] = serde_json::Value::Bool(enabled);
+    if let Err(e) = save_raw(&cfg) {
+        tracing::error!(error = %e, "failed to save providers config");
+        return;
+    }
+    let state = if enabled { "enabled" } else { "disabled" };
+    tracing::info!(provider = %name, state, "provider toggled — applies on the next request");
+}
+
+/// `cmdcode connect enable <name>`
+pub fn enable(name: &str) {
+    set_enabled(name, true);
+}
+
+/// `cmdcode connect disable <name>`
+pub fn disable(name: &str) {
+    set_enabled(name, false);
 }

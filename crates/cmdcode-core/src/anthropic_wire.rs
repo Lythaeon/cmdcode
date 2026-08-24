@@ -31,7 +31,9 @@ pub enum AnthropicBlock {
     /// Tool result returned by the client.
     #[serde(rename = "tool_result")]
     ToolResult {
+        /// ID of the tool_use block this responds to.
         tool_use_id: String,
+        /// Result payload (string or content blocks).
         #[serde(default)]
         content: Value,
     },
@@ -389,6 +391,7 @@ enum BlockKind {
 }
 
 impl AnthropicStreamRenderer {
+    /// Create a fresh renderer for one streamed response.
     pub fn new() -> Self {
         Self::default()
     }

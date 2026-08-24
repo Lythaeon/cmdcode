@@ -86,6 +86,55 @@ pub trait Provider: Send + Sync {
     }
 }
 
+/// Stub used when every declared provider is disabled: serves a clear 503.
+pub struct NoEnabledProvider;
+
+#[async_trait::async_trait]
+impl Provider for NoEnabledProvider {
+    fn name(&self) -> &'static str {
+        "none"
+    }
+
+    fn endpoint(&self) -> String {
+        "http://cmdcode.invalid/disabled".into()
+    }
+
+    async fn headers(
+        &self,
+        _auth: &AuthManager,
+        _cwd: &str,
+    ) -> Result<Vec<(String, String)>, UpstreamError> {
+        Ok(Vec::new())
+    }
+
+    fn build_body(&self, _ctx: &RequestContext<'_>) -> serde_json::Value {
+        serde_json::json!({})
+    }
+
+    fn translate_line<'a>(
+        &self,
+        _line: &str,
+        _state: &mut crate::upstream::StreamState<'a>,
+    ) -> crate::upstream::LineOutcome {
+        crate::upstream::LineOutcome::Skip
+    }
+
+    fn parse_non_streaming(
+        &self,
+        _text: &str,
+        _model: &str,
+    ) -> Result<serde_json::Value, UpstreamError> {
+        Err(UpstreamError::HttpError {
+            status: 503,
+            body: "all providers are disabled".into(),
+        })
+    }
+
+    fn is_auth_rejected(&self, _status: u16) -> bool {
+        false
+    }
+}
+
 /// Routes each request to the provider that declares its model.
 ///
 /// Built from the opencode-style `providers.json` when present; otherwise a
@@ -117,6 +166,7 @@ pub struct RouterHandle {
 }
 
 impl RouterHandle {
+    /// Wrap an initial router together with the inputs needed to rebuild it.
     pub fn new(
         router: ProviderRouter,
         config: Arc<cmdcode_core::config::ProxyConfig>,
@@ -199,7 +249,13 @@ impl ProviderRouter {
             .and_then(|p| std::fs::metadata(p).ok())
             .and_then(|m| m.modified().ok());
 
+        let mut enabled_seen = false;
         for (key, entry) in cfg.entries() {
+            if !entry.is_enabled() {
+                tracing::info!(provider = %key, "skipping disabled provider");
+                continue;
+            }
+            enabled_seen = true;
             let provider: Arc<dyn Provider> = match entry.kind() {
                 cmdcode_core::provider_config::AdapterKind::OpenAi => Arc::new(openai::OpenAiProvider {
                     base_url: entry.base_url().unwrap_or_else(|| "http://localhost".into()),
@@ -231,7 +287,10 @@ impl ProviderRouter {
             }
         }
 
-        let default = default.expect("providers map was non-empty");
+        // Every entry disabled: keep routing alive so requests get a clear
+        // 503 instead of falling through to an unexpected backend.
+        let default = default.unwrap_or_else(|| Arc::new(NoEnabledProvider));
+        let _ = enabled_seen;
         Self {
             default,
             by_model,

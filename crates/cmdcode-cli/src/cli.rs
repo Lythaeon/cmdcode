@@ -200,6 +200,16 @@ pub enum ConnectCommand {
         /// Provider id from providers.json
         name: String,
     },
+    /// Enable a disabled provider (applies instantly via hot reload)
+    Enable {
+        /// Provider id from providers.json
+        name: String,
+    },
+    /// Disable a provider (applies instantly via hot reload)
+    Disable {
+        /// Provider id from providers.json
+        name: String,
+    },
     /// List configured providers
     List,
     /// Probe a provider's endpoint connectivity
