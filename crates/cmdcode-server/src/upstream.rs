@@ -112,12 +112,11 @@ impl UpstreamClient {
         let params_obj = params.as_object_mut().expect("params is an object");
 
         if let Some(system) = extract_system(&body.messages) {
-            // Prepend taste content if taste learning is enabled.
+            // Prepend the taste section if taste learning is enabled.
+            // Mirrors the CLI: always rendered, with a "no preferences yet"
+            // block when empty so the agent knows learning is active.
             let system = if self.taste_enabled().await {
-                match read_taste_content(&self.config.auth_dir, &cwd).await {
-                    Some(taste) => format!("{taste}\n\n{system}"),
-                    None => system,
-                }
+                format!("{}\n\n{system}", read_taste_content(&self.config.auth_dir, &cwd).await)
             } else {
                 system
             };
@@ -892,8 +891,11 @@ fn extract_system(messages: &[cmdcode_core::wire_format::OpenAiMessage]) -> Opti
 }
 
 /// Read taste content from global and project-local taste files, mirroring
-/// the CLI's `getTasteContent` + `renderTasteSection2`.
-async fn read_taste_content(auth_dir: &std::path::Path, cwd: &str) -> Option<String> {
+/// the CLI's `getTasteContent` + `renderTasteSection2`. Always returns a
+/// rendered section: when no preferences exist yet, the CLI still sends the
+/// "no preferences learned yet" block, which primes the agent to record
+/// taste during the session.
+async fn read_taste_content(auth_dir: &std::path::Path, cwd: &str) -> String {
     let global_path = auth_dir.join("taste").join("taste.md");
     let local_path = std::path::Path::new(cwd)
         .join(".commandcode")
@@ -914,11 +916,11 @@ async fn read_taste_content(auth_dir: &std::path::Path, cwd: &str) -> Option<Str
     }
 
     if parts.is_empty() {
-        return None;
+        return "<taste>\nNo preferences learned yet for this project. The .commandcode/taste/taste.md file is empty or doesn't exist yet. Preferences will be learned automatically as you work.\n</taste>".into();
     }
-
     let raw = parts.join("\n\n");
-    Some(format!(
+
+    format!(
         "<taste>\n\
          Below is the complete content of the .commandcode/taste/taste.md file.\n\
          This shows you what preferences are available and which categories might have\n\
@@ -932,7 +934,7 @@ async fn read_taste_content(auth_dir: &std::path::Path, cwd: &str) -> Option<Str
          \n\
          --- End of .commandcode/taste/taste.md ---\n\
          </taste>"
-    ))
+    )
 }
 
 /// Check if a taste file contains only markdown headers (no real content).
@@ -976,13 +978,12 @@ mod tests {
         .unwrap();
 
         let result = read_taste_content(tmp.path(), "/nonexistent").await;
-        let content = result.expect("should return taste content");
         assert!(
-            content.contains("Prefer 2-space indent"),
-            "taste content must be present: {content}"
+            result.contains("Prefer 2-space indent"),
+            "taste content must be present: {result}"
         );
         assert!(
-            content.starts_with("<taste>"),
+            result.starts_with("<taste>"),
             "must be wrapped in <taste> tags"
         );
     }
@@ -996,15 +997,17 @@ mod tests {
         std::fs::write(taste_dir.join("taste.md"), "Use 4 spaces").unwrap();
 
         let result = read_taste_content(tmp.path(), project.to_str().unwrap()).await;
-        let content = result.unwrap();
-        assert!(content.contains("Use 4 spaces"));
+        assert!(result.contains("Use 4 spaces"));
     }
 
     #[tokio::test]
-    async fn test_read_taste_content_none_when_missing() {
+    async fn test_read_taste_content_empty_section_when_missing() {
         let tmp = TempDir::new().unwrap();
         let result = read_taste_content(tmp.path(), "/nonexistent").await;
-        assert!(result.is_none());
+        // CLI parity: empty taste still renders the "no preferences yet" block
+        assert!(result.contains("No preferences learned yet"));
+        assert!(result.starts_with("<taste>"));
+        assert!(result.ends_with("</taste>"));
     }
 
     #[tokio::test]
@@ -1014,7 +1017,12 @@ mod tests {
         std::fs::create_dir_all(&taste_dir).unwrap();
         std::fs::write(taste_dir.join("taste.md"), "# only a header\n\n").unwrap();
         let result = read_taste_content(tmp.path(), "/nonexistent").await;
-        assert!(result.is_none(), "header-only file should be skipped");
+        // Header-only file is skipped -> falls back to the empty section
+        assert!(
+            result.contains("No preferences learned yet"),
+            "header-only file should be skipped: {result}"
+        );
+        assert!(!result.contains("# only a header"));
     }
 
     #[tokio::test]
@@ -1030,9 +1038,8 @@ mod tests {
         std::fs::write(local.join("taste.md"), "Project-specific").unwrap();
 
         let result = read_taste_content(tmp.path(), project.to_str().unwrap()).await;
-        let content = result.unwrap();
-        assert!(content.contains("Global preferences"));
-        assert!(content.contains("Project-specific"));
+        assert!(result.contains("Global preferences"));
+        assert!(result.contains("Project-specific"));
     }
 
     fn state<'a>(completion_id: &'a str, model: &'a str) -> StreamState<'a> {
