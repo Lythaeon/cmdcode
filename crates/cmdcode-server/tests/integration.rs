@@ -1866,3 +1866,248 @@ async fn test_stream_empty_upstream_retries() {
         "expected 200 or 502, got {status}"
     );
 }
+
+// ============================================================
+// Cross-frontend collision harness: all five protocol frontends
+// against one proxy instance, sequentially and concurrently.
+// ============================================================
+
+#[tokio::test]
+async fn test_all_frontends_no_collision() {
+    let mock_addr = MockUpstream::normal().start().await;
+    let proxy = start_proxy(mock_addr, 0, 30).await;
+    let client = reqwest::Client::new();
+    let model = "xiaomi/mimo-v2.5";
+
+    // --- 1. Sequential: each frontend gets its correct dialect back ---
+    // OpenAI non-streaming
+    let r: serde_json::Value = client
+        .post(format!("{proxy}/v1/chat/completions"))
+        .json(&serde_json::json!({
+            "model": model, "messages": [{"role":"user","content":"hi"}]
+        }))
+        .send().await.unwrap()
+        .json().await.unwrap();
+    assert_eq!(r.pointer("/choices/0/message/content").and_then(|v| v.as_str()), Some("Hello world"));
+    assert_eq!(r["object"], "chat.completion");
+
+    // Anthropic non-streaming
+    let r: serde_json::Value = client
+        .post(format!("{proxy}/v1/messages"))
+        .header("x-api-key", "k")
+        .json(&serde_json::json!({
+            "model": model, "max_tokens": 100,
+            "messages": [{"role":"user","content":"hi"}]
+        }))
+        .send().await.unwrap()
+        .json().await.unwrap();
+    assert_eq!(r["type"], "message");
+    assert_eq!(r["content"][0]["type"], "text");
+    assert_eq!(r["stop_reason"], "end_turn");
+
+    // Gemini non-streaming
+    let r: serde_json::Value = client
+        .post(format!("{proxy}/v1beta/models/{model}:generateContent"))
+        .json(&serde_json::json!({"contents":[{"role":"user","parts":[{"text":"hi"}]}]}))
+        .send().await.unwrap()
+        .json().await.unwrap();
+    assert_eq!(r["candidates"][0]["content"]["role"], "model");
+    assert_eq!(r["candidates"][0]["finishReason"], "STOP");
+    assert!(r["usageMetadata"]["totalTokenCount"].as_u64().unwrap() > 0);
+
+    // Responses API non-streaming
+    let r: serde_json::Value = client
+        .post(format!("{proxy}/v1/responses"))
+        .json(&serde_json::json!({"model": model, "input": "hi"}))
+        .send().await.unwrap()
+        .json().await.unwrap();
+    assert_eq!(r["object"], "response");
+    assert_eq!(r["status"], "completed");
+
+    // Ollama non-streaming
+    let r: serde_json::Value = client
+        .post(format!("{proxy}/api/chat"))
+        .json(&serde_json::json!({
+            "model": model, "messages": [{"role":"user","content":"hi"}], "stream": false
+        }))
+        .send().await.unwrap()
+        .json().await.unwrap();
+    assert_eq!(r["done"], true);
+    assert_eq!(r["message"]["role"], "assistant");
+
+    // --- 2. Streaming variants: each emits its own dialect framing ---
+    // OpenAI SSE
+    let body = client
+        .post(format!("{proxy}/v1/chat/completions"))
+        .json(&serde_json::json!({
+            "model": model, "messages": [{"role":"user","content":"hi"}], "stream": true
+        }))
+        .send().await.unwrap()
+        .text().await.unwrap();
+    assert!(body.contains("chat.completion.chunk"), "openai stream frame: {body}");
+    assert!(body.contains("[DONE]"));
+
+    // Anthropic events
+    let body = client
+        .post(format!("{proxy}/v1/messages"))
+        .header("x-api-key", "k")
+        .json(&serde_json::json!({
+            "model": model, "max_tokens": 100, "stream": true,
+            "messages": [{"role":"user","content":"hi"}]
+        }))
+        .send().await.unwrap()
+        .text().await.unwrap();
+    assert!(body.contains("event: message_start"), "{}", body);
+    assert!(body.contains("event: content_block_delta"));
+    assert!(body.contains("event: message_stop"));
+
+    // Gemini chunks
+    let body = client
+        .post(format!("{proxy}/v1beta/models/{model}:streamGenerateContent"))
+        .json(&serde_json::json!({"contents":[{"role":"user","parts":[{"text":"hi"}]}]}))
+        .send().await.unwrap()
+        .text().await.unwrap();
+    assert!(body.contains("\"finishReason\":\"STOP\""), "{}", body);
+    assert!(body.contains("usageMetadata"));
+
+    // Responses events
+    let body = client
+        .post(format!("{proxy}/v1/responses"))
+        .json(&serde_json::json!({"model": model, "input": "hi", "stream": true}))
+        .send().await.unwrap()
+        .text().await.unwrap();
+    assert!(body.contains("event: response.created"), "{}", body);
+    assert!(body.contains("event: response.output_text.delta"));
+    assert!(body.contains("event: response.completed"));
+
+    // Ollama NDJSON
+    let body = client
+        .post(format!("{proxy}/api/chat"))
+        .json(&serde_json::json!({
+            "model": model, "messages": [{"role":"user","content":"hi"}], "stream": true
+        }))
+        .send().await.unwrap()
+        .text().await.unwrap();
+    assert!(body.contains("\"done\":false"));
+    assert!(body.contains("\"done\":true"));
+
+    // --- 3. Concurrent interleaving across frontends on shared connections ---
+    let mut handles = Vec::new();
+    for i in 0..5u32 {
+        let client = client.clone();
+        let proxy = proxy.clone();
+        let model = model.to_string();
+        handles.push(tokio::spawn(async move {
+            match i % 5 {
+                0 => {
+                    let r: serde_json::Value = client
+                        .post(format!("{proxy}/v1/chat/completions"))
+                        .json(&serde_json::json!({"model": model,
+                            "messages":[{"role":"user","content":"x"}]}))
+                        .send().await.unwrap().json().await.unwrap();
+                    assert_eq!(r["object"], "chat.completion");
+                }
+                1 => {
+                    let r: serde_json::Value = client
+                        .post(format!("{proxy}/v1/messages"))
+                        .header("x-api-key", "k")
+                        .json(&serde_json::json!({"model": model, "max_tokens": 10,
+                            "messages":[{"role":"user","content":"x"}]}))
+                        .send().await.unwrap().json().await.unwrap();
+                    assert_eq!(r["type"], "message");
+                }
+                2 => {
+                    let r: serde_json::Value = client
+                        .post(format!("{proxy}/v1beta/models/{model}:generateContent"))
+                        .json(&serde_json::json!({"contents":[
+                            {"role":"user","parts":[{"text":"x"}]}]}))
+                        .send().await.unwrap().json().await.unwrap();
+                    assert!(r["candidates"][0]["finishReason"].is_string());
+                }
+                3 => {
+                    let r: serde_json::Value = client
+                        .post(format!("{proxy}/v1/responses"))
+                        .json(&serde_json::json!({"model": model, "input": "x"}))
+                        .send().await.unwrap().json().await.unwrap();
+                    assert_eq!(r["object"], "response");
+                }
+                _ => {
+                    let r: serde_json::Value = client
+                        .post(format!("{proxy}/api/chat"))
+                        .json(&serde_json::json!({"model": model,
+                            "messages":[{"role":"user","content":"x"}], "stream": false}))
+                        .send().await.unwrap().json().await.unwrap();
+                    assert_eq!(r["done"], true);
+                }
+            }
+        }));
+    }
+    for h in handles {
+        h.await.unwrap();
+    }
+
+    // /v1/models still intact after everything.
+    let r: serde_json::Value = client
+        .get(format!("{proxy}/v1/models"))
+        .send().await.unwrap()
+        .json().await.unwrap();
+    assert!(!r["data"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_responses_session_chaining() {
+    let mock_addr = MockUpstream::normal().start().await;
+    let proxy = start_proxy(mock_addr, 0, 30).await;
+    let client = reqwest::Client::new();
+
+    // Turn 1: capture the assigned response id.
+    let r1: serde_json::Value = client
+        .post(format!("{proxy}/v1/responses"))
+        .json(&serde_json::json!({"model": "xiaomi/mimo-v2.5", "input": "hi"}))
+        .send().await.unwrap()
+        .json().await.unwrap();
+    let resp_id = r1["id"].as_str().unwrap().to_string();
+    assert!(resp_id.starts_with("resp_"), "server-assigned id: {resp_id}");
+
+    // Turn 2: chain via previous_response_id — must be accepted (the mock
+    // upstream answers regardless; what matters is no 404 and normal shape).
+    let r2: serde_json::Value = client
+        .post(format!("{proxy}/v1/responses"))
+        .json(&serde_json::json!({
+            "model": "xiaomi/mimo-v2.5",
+            "input": "what did I say?",
+            "previous_response_id": resp_id,
+            "stream": false,
+        }))
+        .send().await.unwrap()
+        .json().await.unwrap();
+    assert_eq!(r2["object"], "response", "chained turn failed: {r2}");
+    assert!(r2["id"].as_str().unwrap().starts_with("resp_"));
+
+    // Unknown previous_response_id -> clean 404.
+    let status = client
+        .post(format!("{proxy}/v1/responses"))
+        .json(&serde_json::json!({
+            "model": "xiaomi/mimo-v2.5",
+            "input": "x",
+            "previous_response_id": "resp_does_not_exist",
+        }))
+        .send().await.unwrap()
+        .status();
+    assert_eq!(status, 404);
+
+    // Streaming turn with chaining carries the server-assigned id in events.
+    let body = client
+        .post(format!("{proxy}/v1/responses"))
+        .json(&serde_json::json!({
+            "model": "xiaomi/mimo-v2.5",
+            "input": "again",
+            "previous_response_id": r2["id"].as_str().unwrap(),
+            "stream": true,
+        }))
+        .send().await.unwrap()
+        .text().await.unwrap();
+    // Chained streaming turns still get their own fresh resp_* id.
+    assert!(body.contains("event: response.created"), "{}", body.as_str());
+    assert!(body.contains("resp_"), "expected server-assigned id in {body}");
+}

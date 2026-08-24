@@ -81,6 +81,9 @@ pub struct ResponsesRequest {
     /// Nucleus sampling threshold.
     #[serde(default)]
     pub top_p: Option<f64>,
+    /// Chain onto a stored prior response (server-side session state).
+    #[serde(rename = "previous_response_id", default)]
+    pub previous_response_id: Option<String>,
 }
 
 /// Extract text from message content (string or parts array).
@@ -317,12 +320,32 @@ pub fn completion_to_responses(openai: &Value, model: &str) -> Value {
 pub struct ResponsesStreamRenderer {
     created: bool,
     finished: bool,
+    /// Fixed response id used in emitted events (server-assigned
+    /// `resp_*` id when session chaining is active).
+    response_id: Option<String>,
 }
 
 impl ResponsesStreamRenderer {
     /// Create a fresh renderer for one streamed response.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a renderer that stamps a server-assigned response id into
+    /// every event (required for `previous_response_id` chaining).
+    pub fn new_with_id(response_id: String) -> Self {
+        Self {
+            response_id: Some(response_id),
+            ..Self::default()
+        }
+    }
+
+    fn effective_id(&self, chunk: &Value) -> Value {
+        if let Some(id) = &self.response_id {
+            json!(id)
+        } else {
+            chunk.get("id").cloned().unwrap_or_else(|| json!("resp_cmdcode"))
+        }
     }
 
     fn frame(event: &str, data: Value) -> String {
@@ -349,12 +372,13 @@ impl ResponsesStreamRenderer {
         let mut out = Vec::new();
         if !self.created {
             self.created = true;
+            let id_val = self.effective_id(&chunk);
             out.push(Self::frame(
                 "response.created",
                 json!({
                     "type": "response.created",
                     "response": {
-                        "id": chunk.get("id").cloned().unwrap_or_else(|| json!("resp_cmdcode")),
+                        "id": id_val,
                         "object": "response",
                         "status": "in_progress",
                         "model": chunk.get("model").cloned().unwrap_or_else(|| json!("")),

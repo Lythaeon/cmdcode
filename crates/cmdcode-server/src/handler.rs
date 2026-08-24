@@ -80,6 +80,8 @@ pub struct CommandCodeProxy {
     pub metrics: Arc<Metrics>,
     /// Rate limiter for API requests.
     pub rate_limiter: Arc<RateLimiter>,
+    /// Server-side response-session store (Responses API chaining).
+    pub sessions: Arc<crate::session_store::ResponseSessionStore>,
 }
 
 /// Per-request context passed through the proxy pipeline.
@@ -421,7 +423,7 @@ impl ProxyHttp for CommandCodeProxy {
             }
         }
 
-        let body: ChatCompletionRequest = if let Some(areq) = &anthropic_request {
+        let mut body: ChatCompletionRequest = if let Some(areq) = &anthropic_request {
             areq.to_chat_completion()
         } else if let Some(greq) = &gemini_request {
             let mut cc = greq.to_chat_completion();
@@ -448,6 +450,42 @@ impl ProxyHttp for CommandCodeProxy {
                 }
             }
         };
+
+        // Responses API server-side state: chain onto a prior response's
+        // conversation when previous_response_id is present, and assign our
+        // own resp_* id so the client can reference this turn later.
+        let mut responses_resp_id: Option<String> = None;
+        if let Some(rreq) = &responses_request {
+            if let Some(prev_id) = &rreq.previous_response_id {
+                let Some(stored) = self.sessions.get(prev_id) else {
+                    self.metrics.inc_bad_requests();
+                    let err = serde_json::json!({
+                        "error": {
+                            "message": format!("No response found with id '{prev_id}'."),
+                            "type": "invalid_request_error",
+                            "param": "previous_response_id",
+                        }
+                    });
+                    self.send_json(session, 404, &err).await?;
+                    return Ok(true);
+                };
+                // Prepend the stored conversation; drop the converted request's
+                // own leading system message if the stored one already has it.
+                let mut messages = stored;
+                let skip_system = messages.first().map(|m| m.role == "system").unwrap_or(false)
+                    && body.messages.first().map(|m| m.role == "system").unwrap_or(false);
+                for (i, m) in body.messages.into_iter().enumerate() {
+                    if i == 0 && skip_system {
+                        continue;
+                    }
+                    messages.push(m);
+                }
+                body.messages = messages;
+            }
+            let id = format!("resp_{}", uuid::Uuid::new_v4());
+            self.sessions.insert(id.clone(), body.messages.clone());
+            responses_resp_id = Some(id);
+        }
 
         // Validate model
         let model_id_str = body.model.as_deref().unwrap_or(&self.config.default_model);
@@ -499,16 +537,20 @@ impl ProxyHttp for CommandCodeProxy {
                         &completion,
                         model.as_str(),
                     ),
+                    Frontend::Responses => {
+                        let mut r = cmdcode_core::responses_wire::completion_to_responses(
+                            &completion,
+                            model.as_str(),
+                        );
+                        if let Some(id) = &responses_resp_id {
+                            r["id"] = serde_json::json!(id);
+                        }
+                        r
+                    }
                     Frontend::Gemini => cmdcode_core::gemini_wire::completion_to_gemini(
                         &completion,
                         model.as_str(),
                     ),
-                    Frontend::Responses => {
-                        cmdcode_core::responses_wire::completion_to_responses(
-                            &completion,
-                            model.as_str(),
-                        )
-                    }
                     Frontend::Ollama => cmdcode_core::ollama_wire::completion_to_ollama(
                         &completion,
                         model.as_str(),
@@ -528,7 +570,10 @@ impl ProxyHttp for CommandCodeProxy {
                         cmdcode_core::gemini_wire::GeminiStreamRenderer::new(),
                     )),
                     Frontend::Responses => Some(StreamRenderer::Responses(
-                        cmdcode_core::responses_wire::ResponsesStreamRenderer::new(),
+                        match &responses_resp_id {
+                            Some(id) => cmdcode_core::responses_wire::ResponsesStreamRenderer::new_with_id(id.clone()),
+                            None => cmdcode_core::responses_wire::ResponsesStreamRenderer::new(),
+                        },
                     )),
                     Frontend::Ollama => Some(StreamRenderer::Ollama(
                         cmdcode_core::ollama_wire::OllamaStreamRenderer::new(model.as_str()),
