@@ -25,8 +25,11 @@ fn taste_file() -> PathBuf {
 }
 
 fn upstream_url() -> String {
-    std::env::var("COMMAND_CODE_API_BASE")
-        .unwrap_or_else(|_| "https://api.commandcode.ai".into())
+    // Route through the local proxy instead of upstream directly.
+    // The upstream API detects non-CLI callers (TLS fingerprinting) and rejects them.
+    // The local proxy already handles auth and upstream communication.
+    std::env::var("COMMAND_CODE_PROXY_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:18080".into())
 }
 
 fn upstream_model() -> String {
@@ -36,28 +39,26 @@ fn upstream_model() -> String {
 
 // --- MCP JSON-RPC server ---
 
-fn read_jsonrpc() -> Option<Value> {
-    let stdin = std::io::stdin();
-    let mut line = String::new();
-    BufReader::new(stdin).read_line(&mut line).ok()?;
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    serde_json::from_str(trimmed).ok()
+fn eprintln(msg: &str) {
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr(), "[cmdcode-mcp] {msg}");
 }
 
 fn write_jsonrpc(id: Option<Value>, result: Value) {
     let resp = json!({"jsonrpc": "2.0", "result": result, "id": id});
+    let serialized = serde_json::to_string(&resp).unwrap_or_default();
+    eprintln(&format!("send: {serialized}"));
     let mut stdout = std::io::stdout();
-    let _ = writeln!(stdout, "{}", serde_json::to_string(&resp).unwrap_or_default());
+    let _ = writeln!(stdout, "{serialized}");
     let _ = stdout.flush();
 }
 
 fn write_jsonrpc_error(id: Option<Value>, code: i64, message: String) {
     let resp = json!({"jsonrpc": "2.0", "error": {"code": code, "message": message}, "id": id});
+    let serialized = serde_json::to_string(&resp).unwrap_or_default();
+    eprintln(&format!("send(err): {serialized}"));
     let mut stdout = std::io::stdout();
-    let _ = writeln!(stdout, "{}", serde_json::to_string(&resp).unwrap_or_default());
+    let _ = writeln!(stdout, "{serialized}");
     let _ = stdout.flush();
 }
 
@@ -108,31 +109,26 @@ async fn handle_taste_call(instruction: &str) -> Result<String, String> {
     };
 
     let body = json!({
-        "config": {
-            "workingDir": std::env::current_dir()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| ".".to_string()),
-            "date": chrono_date(),
-            "environment": "linux",
-            "structure": [],
-            "isGitRepo": false,
-            "currentBranch": "",
-            "mainBranch": "",
-            "gitStatus": "",
-            "recentCommits": []
-        },
-        "memory": null,
-        "taste": null,
-        "skills": null,
-        "permissionMode": "standard",
-        "mode": "agent",
-        "params": {
-            "model": upstream_model(),
-            "messages": [{"role": "user", "content": user_msg}],
-            "tools": [json!({
+        "model": upstream_model(),
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are a taste learning assistant. Analyze user coding preferences and write taste files.\n\
+                    You have access to a write_taste_file tool. Use it to record preferences.\n\
+                    Format taste files as markdown with clear categories and rules.\n\
+                    Only record genuinely stated preferences, don't invent them."
+            },
+            {
+                "role": "user",
+                "content": user_msg
+            }
+        ],
+        "tools": [json!({
+            "type": "function",
+            "function": {
                 "name": "write_taste_file",
                 "description": "Write a taste category file. Use this to record preferences.",
-                "inputSchema": {
+                "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "Path like 'style.md' or 'tools.md'"},
@@ -140,21 +136,28 @@ async fn handle_taste_call(instruction: &str) -> Result<String, String> {
                     },
                     "required": ["path", "content"]
                 }
-            })],
-            "max_tokens": 2048,
-            "stream": false
-        }
+            }
+        })],
+        "max_tokens": 2048,
+        "stream": false
     });
 
-    // Call upstream
-    let url = format!("{}/alpha/generate", upstream_url());
+    // Call through local proxy
+    let url = format!("{}/v1/chat/completions", upstream_url());
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
         .build()
         .map_err(|e| format!("HTTP client error: {e}"))?;
 
-    // Build auth headers from vault or legacy auth.json
-    let headers = build_auth_headers().await;
+    // Auth through proxy uses the proxy's incoming token, not the upstream key
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("Content-Type", "application/json".parse().unwrap());
+    // The proxy accepts any token when no incoming token is configured
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        "Bearer command-code".parse().unwrap(),
+    );
+
     let resp = client
         .post(&url)
         .headers(headers)
@@ -169,38 +172,42 @@ async fn handle_taste_call(instruction: &str) -> Result<String, String> {
         return Err(format!("upstream error {status}: {body_text}"));
     }
 
-    // Parse response - the model returns tool calls
+    // Parse OpenAI format response
     let response: Value = resp
         .json()
         .await
         .map_err(|e| format!("invalid upstream response: {e}"))?;
 
-    // Extract content from the response
-    let content = response
-        .get("content")
+    // Extract tool calls from choices[0].message.tool_calls
+    let tool_calls = response
+        .get("choices")
         .and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(|msg| msg.get("tool_calls"))
+        .and_then(|tc| tc.as_array())
         .cloned()
         .unwrap_or_default();
 
     let mut results = Vec::new();
-    for item in &content {
-        if item.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
-            let tool_name = item.get("name").and_then(|n| n.as_str()).unwrap_or("");
-            let input = item.get("input").cloned().unwrap_or(json!({}));
+    for tc in &tool_calls {
+        let func = tc.get("function").cloned().unwrap_or(json!({}));
+        let tool_name = func.get("name").and_then(|n| n.as_str()).unwrap_or("");
+        let args_str = func.get("arguments").and_then(|a| a.as_str()).unwrap_or("{}");
+        let input: Value = serde_json::from_str(args_str).unwrap_or(json!({}));
 
-            if tool_name == "write_taste_file" {
-                if let (Some(path), Some(content)) = (
-                    input.get("path").and_then(|p| p.as_str()),
-                    input.get("content").and_then(|c| c.as_str()),
-                ) {
-                    let taste_path = resolve_taste_path(path);
-                    if let Some(p) = taste_path {
-                        std::fs::create_dir_all(p.parent().unwrap_or(Path::new(".")))
-                            .map_err(|e| format!("mkdir failed: {e}"))?;
-                        std::fs::write(&p, content)
-                            .map_err(|e| format!("write failed: {e}"))?;
-                        results.push(format!("Recorded preferences in {}", p.display()));
-                    }
+        if tool_name == "write_taste_file" {
+            if let (Some(path), Some(content)) = (
+                input.get("path").and_then(|p| p.as_str()),
+                input.get("content").and_then(|c| c.as_str()),
+            ) {
+                let taste_path = resolve_taste_path(path);
+                if let Some(p) = taste_path {
+                    std::fs::create_dir_all(p.parent().unwrap_or(Path::new(".")))
+                        .map_err(|e| format!("mkdir failed: {e}"))?;
+                    std::fs::write(&p, content)
+                        .map_err(|e| format!("write failed: {e}"))?;
+                    results.push(format!("Recorded preferences in {}", p.display()));
                 }
             }
         }
@@ -260,160 +267,110 @@ fn resolve_taste_path(relative: &str) -> Option<PathBuf> {
     }
 }
 
-fn chrono_date() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let days = now.as_secs() / 86400;
-    let (y, m, d) = civil_from_days(days as i64);
-    format!("{y:04}-{m:02}-{d:02}")
-}
-
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    (if m <= 2 { y + 1 } else { y }, m, d)
-}
-
-async fn build_auth_headers() -> reqwest::header::HeaderMap {
-    use reqwest::header;
-
-    let mut headers = header::HeaderMap::new();
-    headers.insert("Content-Type", "application/json".parse().unwrap());
-    headers.insert("User-Agent", "cli".parse().unwrap());
-
-    // Try vault first
-    let vault = cmdcode_core::accounts::AccountStore::default();
-    if let Ok(v) = vault.load() {
-        if let Some(acct) = v.active_account() {
-            let key = acct.api_key.as_str();
-            if !key.is_empty() {
-                headers.insert(
-                    header::AUTHORIZATION,
-                    format!("Bearer {key}").parse().unwrap(),
-                );
-            }
-        }
-    }
-
-    // Fallback to legacy auth.json
-    if !headers.contains_key("authorization") {
-        let auth_file = home().join(".commandcode").join("auth.json");
-        if let Ok(content) = std::fs::read_to_string(&auth_file) {
-            if let Ok(auth) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(key) = auth.get("apiKey").and_then(|k| k.as_str()) {
-                    headers.insert(
-                        header::AUTHORIZATION,
-                        format!("Bearer {key}").parse().unwrap(),
-                    );
-                }
-            }
-        }
-    }
-
-    headers.insert("x-cli-environment", "production".parse().unwrap());
-    headers.insert("x-command-code-version", "1.0.0".parse().unwrap());
-    headers.insert(
-        "x-project-slug",
-        "cmdcode-mcp".parse().unwrap(),
-    );
-    headers.insert("x-session-id", uuid_v4().parse().unwrap());
-    headers
-}
-
-fn uuid_v4() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let pid = std::process::id();
-    format!("taste-{nanos:016x}{pid:08x}")
-}
-
 // --- Main ---
 
 #[tokio::main]
 async fn main() {
+    eprintln(&format!("started, pid={}", std::process::id()));
+    let stdin = std::io::stdin();
+    let mut reader = BufReader::new(stdin.lock());
+
     // MCP server runs on stdio — read JSON-RPC requests, respond on stdout
     loop {
-        match read_jsonrpc() {
-            None => break,
-            Some(req) => {
-                let id = req.get("id").cloned();
-                let method = req
-                    .get("method")
-                    .and_then(|m| m.as_str())
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => {
+                eprintln("stdin closed, exiting");
+                break;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                eprintln(&format!("read error: {e}"));
+                break;
+            }
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            line.clear();
+            continue;
+        }
+        eprintln(&format!("recv: {trimmed}"));
+
+        let req: Value = match serde_json::from_str(trimmed) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln(&format!("parse error: {e}"));
+                continue;
+            }
+        };
+
+        let id = req.get("id").cloned();
+        let method = req
+            .get("method")
+            .and_then(|m| m.as_str())
+            .unwrap_or("");
+        eprintln(&format!("method: {method}"));
+
+        match method {
+            "initialize" => {
+                write_jsonrpc(
+                    id,
+                    json!({
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "cmdcode-taste", "version": "0.1.0"}
+                    }),
+                );
+            }
+            "notifications/initialized" => {
+                // Acknowledgment — no response needed
+            }
+            "ping" => {
+                write_jsonrpc(id, json!({}));
+            }
+            "notifications/cancelled" | "notifications/progress" => {
+                // Acknowledgment — no response needed
+            }
+            "resources/list" => {
+                write_jsonrpc(id, json!({"resources": []}));
+            }
+            "tools/list" => {
+                write_jsonrpc(id, json!({"tools": [taste_tool_schema()]}));
+            }
+            "tools/call" => {
+                let params = req.get("params").cloned().unwrap_or(json!({}));
+                let name = params
+                    .get("name")
+                    .and_then(|n| n.as_str())
                     .unwrap_or("");
 
-                match method {
-                    "initialize" => {
+                if name != "taste" {
+                    write_jsonrpc_error(id, -32601, format!("Unknown tool: {name}"));
+                    continue;
+                }
+
+                let args = params.get("arguments").cloned().unwrap_or(json!({}));
+                let instruction = args
+                    .get("instruction")
+                    .and_then(|i| i.as_str())
+                    .unwrap_or("");
+
+                match handle_taste_call(instruction).await {
+                    Ok(msg) => {
                         write_jsonrpc(
                             id,
-                            json!({
-                                "protocolVersion": "2024-11-05",
-                                "capabilities": {"tools": {}},
-                                "serverInfo": {"name": "cmdcode-taste", "version": "0.1.0"}
-                            }),
+                            json!({"content": [{"type": "text", "text": msg}]}),
                         );
                     }
-                    "notifications/initialized" => {
-                        // Acknowledgment — no response needed
-                    }
-                    "ping" => {
-                        write_jsonrpc(id, json!({}));
-                    }
-                    "notifications/cancelled" | "notifications/progress" => {
-                        // Acknowledgment — no response needed
-                    }
-                    "resources/list" => {
-                        write_jsonrpc(id, json!({"resources": []}));
-                    }
-                    "tools/list" => {
-                        write_jsonrpc(id, json!({"tools": [taste_tool_schema()]}));
-                    }
-                    "tools/call" => {
-                        let params = req.get("params").cloned().unwrap_or(json!({}));
-                        let name = params
-                            .get("name")
-                            .and_then(|n| n.as_str())
-                            .unwrap_or("");
-
-                        if name != "taste" {
-                            write_jsonrpc_error(id, -32601, format!("Unknown tool: {name}"));
-                            continue;
-                        }
-
-                        let args = params.get("arguments").cloned().unwrap_or(json!({}));
-                        let instruction = args
-                            .get("instruction")
-                            .and_then(|i| i.as_str())
-                            .unwrap_or("");
-
-                        match handle_taste_call(instruction).await {
-                            Ok(msg) => {
-                                write_jsonrpc(
-                                    id,
-                                    json!({"content": [{"type": "text", "text": msg}]}),
-                                );
-                            }
-                            Err(e) => {
-                                write_jsonrpc_error(id, -32603, e);
-                            }
-                        }
-                    }
-                    _ => {
-                        write_jsonrpc_error(id, -32601, format!("Method not found: {method}"));
+                    Err(e) => {
+                        write_jsonrpc_error(id, -32603, e);
                     }
                 }
             }
+            _ => {
+                write_jsonrpc_error(id, -32601, format!("Method not found: {method}"));
+            }
         }
+        line.clear();
     }
 }

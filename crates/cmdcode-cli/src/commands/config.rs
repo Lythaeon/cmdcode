@@ -76,11 +76,23 @@ pub fn run() {
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serialize all tests that touch env vars (process-global).
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_config_from_env_defaults() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // Ensure clean env
+        std::env::remove_var("COMMAND_CODE_PROXY_PORT");
+        std::env::remove_var("COMMAND_CODE_PROXY_HOST");
+        std::env::remove_var("COMMAND_CODE_PROXY_TIMEOUT");
+        std::env::remove_var("COMMAND_CODE_PROXY_MODELS");
+        std::env::remove_var("COMMAND_CODE_PROXY_INCOMING_TOKEN");
+        std::env::remove_var("COMMAND_CODE_PROXY_LOG_FILE");
+
         let config = ProxyConfig::from_env().unwrap();
-        // Just verify it parses successfully and has reasonable defaults
         assert!(!config.listen_addr.is_empty());
         assert!(!config.upstream_url.is_empty());
         assert!(!config.default_model.is_empty());
@@ -89,6 +101,7 @@ mod tests {
 
     #[test]
     fn test_config_invalid_port() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("COMMAND_CODE_PROXY_PORT", "not-a-port");
         let result = ProxyConfig::from_env();
         assert!(result.is_err());
@@ -97,6 +110,7 @@ mod tests {
 
     #[test]
     fn test_config_invalid_host() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("COMMAND_CODE_PROXY_HOST", "bad:host");
         let result = ProxyConfig::from_env();
         assert!(result.is_err());
@@ -105,6 +119,7 @@ mod tests {
 
     #[test]
     fn test_config_whitespace_host() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("COMMAND_CODE_PROXY_HOST", "has space");
         let result = ProxyConfig::from_env();
         assert!(result.is_err());
@@ -113,6 +128,7 @@ mod tests {
 
     #[test]
     fn test_config_invalid_timeout() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("COMMAND_CODE_PROXY_TIMEOUT", "not-a-number");
         let result = ProxyConfig::from_env();
         assert!(result.is_err());
@@ -121,6 +137,7 @@ mod tests {
 
     #[test]
     fn test_config_empty_models() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("COMMAND_CODE_PROXY_MODELS", "");
         let config = ProxyConfig::from_env().unwrap();
         assert!(config.model_allowlist.is_none());
@@ -129,11 +146,10 @@ mod tests {
 
     #[test]
     fn test_config_whitespace_models() {
-        // Clean up any leftover env vars from parallel tests
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::remove_var("COMMAND_CODE_PROXY_HOST");
         std::env::set_var("COMMAND_CODE_PROXY_MODELS", "  ,  ,  ");
         let config = ProxyConfig::from_env().unwrap();
-        // Empty entries after splitting/trimming should result in no allowlist
         assert!(
             config.model_allowlist.is_none() || config.model_allowlist.as_ref().unwrap().is_empty()
         );
@@ -142,15 +158,16 @@ mod tests {
 
     #[test]
     fn test_config_tls_both_required() {
-        // Just verify the config struct can hold TLS values
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("COMMAND_CODE_PROXY_HOST");
         let config = ProxyConfig::from_env().unwrap();
-        // TLS config is optional, so just verify the struct exists
         let _ = config.tls_cert;
         let _ = config.tls_key;
     }
 
     #[test]
     fn test_config_empty_incoming_token() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("COMMAND_CODE_PROXY_INCOMING_TOKEN", "  ");
         let config = ProxyConfig::from_env().unwrap();
         assert!(config.incoming_token.is_none());
@@ -159,6 +176,7 @@ mod tests {
 
     #[test]
     fn test_config_empty_log_file() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("COMMAND_CODE_PROXY_LOG_FILE", "  ");
         let config = ProxyConfig::from_env().unwrap();
         assert!(config.log_file.is_none());

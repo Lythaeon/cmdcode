@@ -8,6 +8,25 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
+/// Detect the installed command-code CLI version by running `command-code --version`.
+/// Returns None if the CLI is not installed or the version cannot be parsed.
+fn detect_cli_version() -> Option<String> {
+    let output = std::process::Command::new("command-code")
+        .arg("--version")
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let version = stdout.trim();
+    // Parse "1.32.1" from "1.32.1" or "command-code 1.32.1" etc.
+    let ver = version.split_whitespace().last()?;
+    // Validate it looks like a version
+    if ver.chars().any(|c| c.is_ascii_digit() || c == '.') && ver.contains('.') {
+        Some(ver.to_string())
+    } else {
+        None
+    }
+}
+
 /// Raw auth file contents.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthData {
@@ -303,7 +322,10 @@ impl AuthManager {
         let mut headers = HashMap::new();
         headers.insert("Content-Type".into(), "application/json".into());
         headers.insert("User-Agent".into(), "cli".into());
-        headers.insert("x-command-code-version".into(), "1.0.0".into());
+        headers.insert(
+            "x-command-code-version".into(),
+            detect_cli_version().unwrap_or_else(|| "1.32.1".into()),
+        );
         // Sanitize env var value to prevent header injection via CRLF.
         let cli_env_str = std::env::var("COMMAND_CODE_ENV")
             .unwrap_or_else(|_| "production".into())

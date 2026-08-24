@@ -239,7 +239,38 @@ impl HarnessConfig {
                     }
                 }
             },
-            "model": self.default_model.clone()
+            "model": self.default_model.clone(),
+            "mcp": {
+                "cmdcode-taste": {
+                    "type": "local",
+                    "command": [self.mcp_binary_path()],
+                    "enabled": true,
+                    "timeout": 30
+                }
+            }
+        })
+    }
+
+    fn mcp_binary_path(&self) -> String {
+        // Try release binary first, then debug
+        let release = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("cmdcode-mcp")))
+            .filter(|p| p.exists())
+            .map(|p| p.display().to_string());
+
+        release.unwrap_or_else(|| {
+            // Fallback: assume binary is next to the CLI binary
+            std::env::current_exe()
+                .ok()
+                .map(|p| {
+                    p.parent()
+                        .unwrap_or(std::path::Path::new("."))
+                        .join("cmdcode-mcp")
+                        .display()
+                        .to_string()
+                })
+                .unwrap_or_else(|| "cmdcode-mcp".into())
         })
     }
 
@@ -422,23 +453,91 @@ fn setup_opencode(config: &HarnessConfig, force: bool) -> Result<PathBuf, String
         .join("opencode");
     let config_path = config_dir.join("opencode.json");
 
-    if config_path.exists() && !force {
-        return Err(format!(
-            "config already exists: {}. Use --force to overwrite",
-            config_path.display()
-        ));
-    }
-
     std::fs::create_dir_all(&config_dir)
         .map_err(|e| format!("failed to create config directory: {e}"))?;
 
-    let json = config.to_opencode_json();
-    let content = serde_json::to_string_pretty(&json)
-        .map_err(|e| format!("failed to serialize config: {e}"))?;
+    let new_config = config.to_opencode_json();
 
-    std::fs::write(&config_path, content).map_err(|e| format!("failed to write config: {e}"))?;
+    if config_path.exists() {
+        if !force {
+            // Merge: read existing, overlay provider + mcp
+            let existing = std::fs::read_to_string(&config_path)
+                .map_err(|e| format!("failed to read existing config: {e}"))?;
+            let mut existing: serde_json::Value = serde_json::from_str(&existing)
+                .map_err(|e| format!("failed to parse existing config: {e}"))?;
+
+            // Merge provider
+            if let Some(new_provider) = new_config.get("provider") {
+                let existing_provider = existing
+                    .get("provider")
+                    .cloned()
+                    .unwrap_or(serde_json::json!({}));
+                let merged = deep_merge(existing_provider, new_provider.clone());
+                existing["provider"] = merged;
+            }
+
+            // Set model
+            if let Some(model) = new_config.get("model") {
+                existing["model"] = model.clone();
+            }
+
+            // Merge MCP servers (replace individual server entries, not extend arrays)
+            if let Some(new_mcp) = new_config.get("mcp") {
+                if let Some(overlay_obj) = new_mcp.as_object() {
+                    let existing_mcp = existing
+                        .get("mcp")
+                        .cloned()
+                        .unwrap_or(serde_json::json!({}));
+                    if let Some(base_obj) = existing_mcp.as_object() {
+                        let mut merged = base_obj.clone();
+                        for (k, v) in overlay_obj {
+                            merged.insert(k.clone(), v.clone());
+                        }
+                        existing["mcp"] = serde_json::Value::Object(merged);
+                    } else {
+                        existing["mcp"] = new_mcp.clone();
+                    }
+                }
+            }
+
+            let content = serde_json::to_string_pretty(&existing)
+                .map_err(|e| format!("failed to serialize config: {e}"))?;
+            std::fs::write(&config_path, content)
+                .map_err(|e| format!("failed to write config: {e}"))?;
+            return Ok(config_path);
+        }
+
+        // force: overwrite completely
+        let content = serde_json::to_string_pretty(&new_config)
+            .map_err(|e| format!("failed to serialize config: {e}"))?;
+        std::fs::write(&config_path, content)
+            .map_err(|e| format!("failed to write config: {e}"))?;
+    } else {
+        let content = serde_json::to_string_pretty(&new_config)
+            .map_err(|e| format!("failed to serialize config: {e}"))?;
+        std::fs::write(&config_path, content)
+            .map_err(|e| format!("failed to write config: {e}"))?;
+    }
 
     Ok(config_path)
+}
+
+/// Deep merge two JSON values. `overlay` takes precedence on conflicts.
+fn deep_merge(base: serde_json::Value, overlay: serde_json::Value) -> serde_json::Value {
+    match (base, overlay) {
+        (serde_json::Value::Object(mut base_map), serde_json::Value::Object(overlay_map)) => {
+            for (k, v) in overlay_map {
+                let base_val = base_map.remove(&k).unwrap_or(serde_json::Value::Null);
+                base_map.insert(k, deep_merge(base_val, v));
+            }
+            serde_json::Value::Object(base_map)
+        }
+        (serde_json::Value::Array(mut base_arr), serde_json::Value::Array(overlay_arr)) => {
+            base_arr.extend(overlay_arr);
+            serde_json::Value::Array(base_arr)
+        }
+        (_, overlay) => overlay,
+    }
 }
 
 fn setup_codex(config: &HarnessConfig, force: bool) -> Result<PathBuf, String> {

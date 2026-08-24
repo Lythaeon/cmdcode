@@ -415,7 +415,11 @@ mod integration_tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::Mutex;
     use std::thread;
+
+    /// Serialize all tests that bind to ports (port race prevention).
+    static PORT_LOCK: Mutex<()> = Mutex::new(());
 
     /// Spin up a mock Studio that POSTs credentials to the callback port.
     fn mock_studio_post(port: u16, state: &str) {
@@ -451,6 +455,7 @@ mod integration_tests {
 
     #[test]
     fn test_callback_server_receives_post() {
+        let _guard = PORT_LOCK.lock().unwrap();
         // Get a port, build state, launch mock Studio + callback server
         let port = find_available_port().expect("no free port");
         let state = "test-callback-state-abc";
@@ -465,6 +470,7 @@ mod integration_tests {
 
     #[test]
     fn test_callback_state_mismatch() {
+        let _guard = PORT_LOCK.lock().unwrap();
         let port = find_available_port().expect("no free port");
         // Send a wrong state value
         mock_studio_post(port, "wrong-state");

@@ -90,6 +90,7 @@ pub enum SetupCommand {
 
     /// Configure OpenCode
     #[command(
+        name = "opencode",
         about = "Configure OpenCode to use the proxy",
         long_about = "Configure OpenCode to use cmdcode as the proxy.\nWrites configuration to ~/.config/opencode/opencode.json."
     )]
