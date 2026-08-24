@@ -2,6 +2,8 @@
 //! OpenAI-compatible proxy.
 
 /// Multi-account credential vault.
+pub mod anthropic_wire;
+
 pub mod accounts;
 /// Authentication and credential management.
 pub mod auth;

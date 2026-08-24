@@ -4,6 +4,7 @@ use pingora_core::upstreams::peer::HttpPeer;
 use pingora_error::{Error, ErrorType, Result as PingoraResult};
 use pingora_http::RequestHeader;
 use pingora_proxy::{ProxyHttp, Session};
+use serde_json::Value;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -144,7 +145,10 @@ impl ProxyHttp for CommandCodeProxy {
                 return Ok(true);
             }
             "/v1/chat/completions" | "/chat/completions" if method == http::Method::POST => {
-                // Continue to upstream
+                // OpenAI frontend — continue to upstream
+            }
+            "/v1/messages" | "/messages" if method == http::Method::POST => {
+                // Anthropic frontend — continue to upstream
             }
             _ => {
                 self.metrics.inc_unknown_route();
@@ -161,14 +165,27 @@ impl ProxyHttp for CommandCodeProxy {
 
         // Optional incoming-auth gate. /health and /metrics stay open for
         // monitors and scrapers; every other route requires the token.
+        let is_anthropic_frontend = path.trim_end_matches('/').ends_with("/messages");
         let api_key = if let Some(ref expected) = self.config.incoming_token {
-            let provided = session
-                .req_header()
-                .headers
+            let headers = &session.req_header().headers;
+            let bearer = headers
                 .get(http::header::AUTHORIZATION)
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.strip_prefix("Bearer "))
                 .unwrap_or("");
+            // Anthropic clients authenticate with x-api-key instead.
+            let x_api_key = headers
+                .get("x-api-key")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            let (provided, via_key_header) = if !bearer.is_empty() {
+                (bearer, false)
+            } else if !x_api_key.is_empty() {
+                (x_api_key, true)
+            } else {
+                ("", false)
+            };
+            let _ = via_key_header;
             if !constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
                 self.metrics.inc_error();
                 let err = serde_json::json!({
@@ -227,19 +244,61 @@ impl ProxyHttp for CommandCodeProxy {
             }
         }
 
-        let body: ChatCompletionRequest = match serde_json::from_slice(&body_bytes) {
-            Ok(b) => b,
-            Err(e) => {
-                self.metrics.inc_bad_requests();
-                let err = serde_json::json!({
-                    "error": {
-                        "message": format!("Invalid JSON body: {}", e),
-                        "type": "invalid_request_error"
+        // Anthropic frontend converts /v1/messages bodies to the internal
+        // OpenAI-format request; OpenAI frontend parses directly.
+        let anthropic_request: Option<cmdcode_core::anthropic_wire::AnthropicRequest> =
+            if is_anthropic_frontend {
+                match serde_json::from_slice::<Value>(&body_bytes) {
+                    Ok(raw) => match serde_json::from_value::<
+                        cmdcode_core::anthropic_wire::AnthropicRequest,
+                    >(raw) {
+                        Ok(areq) => Some(areq),
+                        Err(e) => {
+                            self.metrics.inc_bad_requests();
+                            let err = serde_json::json!({
+                                "type": "error",
+                                "error": {
+                                    "type": "invalid_request_error",
+                                    "message": format!("Invalid request body: {}", e),
+                                }
+                            });
+                            self.send_json(session, 400, &err).await?;
+                            return Ok(true);
+                        }
+                    },
+                    Err(e) => {
+                        self.metrics.inc_bad_requests();
+                        let err = serde_json::json!({
+                            "type": "error",
+                            "error": {
+                                "type": "invalid_request_error",
+                                "message": format!("Invalid JSON body: {}", e),
+                            }
+                        });
+                        self.send_json(session, 400, &err).await?;
+                        return Ok(true);
                     }
-                });
-                self.send_json(session, 400, &err).await?;
-                return Ok(true);
-            }
+                }
+            } else {
+                None
+            };
+
+        let body: ChatCompletionRequest = match &anthropic_request {
+            Some(areq) => areq.to_chat_completion(),
+            None => match serde_json::from_slice(&body_bytes) {
+                Ok(b) => b,
+                Err(e) => {
+                    self.metrics.inc_bad_requests();
+                    let err = serde_json::json!({
+                        "error": {
+                            "message": format!("Invalid JSON body: {}", e),
+                            "type": "invalid_request_error"
+                        }
+                    });
+                    self.send_json(session, 400, &err).await?;
+                    return Ok(true);
+                }
+            },
         };
 
         // Validate model
@@ -287,13 +346,31 @@ impl ProxyHttp for CommandCodeProxy {
                     elapsed_ms = start.elapsed().as_millis() as u64,
                     "completed (non-stream)"
                 );
-                self.metrics.inc_bytes_out(completion.to_string().len());
-                self.send_json(session, 200, &completion).await?;
+                let out = match &anthropic_request {
+                    Some(_) => cmdcode_core::anthropic_wire::completion_to_anthropic(
+                        &completion,
+                        model.as_str(),
+                    ),
+                    None => completion,
+                };
+                self.metrics.inc_bytes_out(out.to_string().len());
+                self.send_json(session, 200, &out).await?;
                 Ok(true)
             }
             Ok(upstream::UpstreamResponse::Sse { rx, cancel }) => {
-                self.handle_sse_stream(session, rx, cancel, &model, &body, effort, start)
-                    .await
+                let renderer = anthropic_request
+                    .map(|_| cmdcode_core::anthropic_wire::AnthropicStreamRenderer::new());
+                self.handle_sse_stream(
+                    session,
+                    rx,
+                    cancel,
+                    &model,
+                    &body,
+                    effort,
+                    start,
+                    renderer,
+                )
+                .await
             }
             Err(e) => {
                 self.metrics.inc_error();
@@ -353,6 +430,7 @@ impl CommandCodeProxy {
         body: &ChatCompletionRequest,
         effort: Option<Effort>,
         start: std::time::Instant,
+        mut anthropic_renderer: Option<cmdcode_core::anthropic_wire::AnthropicStreamRenderer>,
     ) -> PingoraResult<bool> {
         tracing::info!(
             elapsed_ms = start.elapsed().as_millis() as u64,
@@ -498,46 +576,72 @@ impl CommandCodeProxy {
             .await
             .is_ok();
 
+        async fn write_chunk(
+            session: &mut Session,
+            line: &str,
+        ) -> std::result::Result<usize, pingora_error::BError> {
+            let len = line.len();
+            session
+                .write_response_body(Some(Bytes::from(line.to_string())), false)
+                .await?;
+            Ok(len)
+        }
+
         let mut chunks = 0u32;
         let mut bytes_out = 0usize;
         let mut client_gone = !header_ok;
         if !client_gone {
-            // First chunk.
-            let first_len = first.len();
-            if let Err(e) = session
-                .write_response_body(Some(Bytes::from(first)), false)
-                .await
-            {
-                if is_client_disconnect(&e) {
-                    tracing::warn!("client disconnected; aborting stream");
-                    self.metrics.inc_client_disconnect();
-                } else {
-                    tracing::warn!(error = %e, "non-disconnect write error; aborting stream");
+            // First chunk (rendered for the active frontend dialect).
+            let first = match anthropic_renderer {
+                Some(ref mut r) => r.feed(&first).join(""),
+                None => first,
+            };
+            if !first.is_empty() {
+                match write_chunk(session, &first).await {
+                    Ok(len) => {
+                        chunks += 1;
+                        bytes_out += len;
+                    }
+                    Err(e) => {
+                        if is_client_disconnect(&e) {
+                            tracing::warn!("client disconnected; aborting stream");
+                            self.metrics.inc_client_disconnect();
+                        } else {
+                            tracing::warn!(error = %e, "non-disconnect write error; aborting stream");
+                        }
+                        client_gone = true;
+                    }
                 }
-                client_gone = true;
-            } else {
-                chunks += 1;
-                bytes_out += first_len;
             }
 
             // Stream the rest.
             while !client_gone {
                 match tokio::time::timeout(idle_timeout, rx.recv()).await {
                     Ok(Some(Ok(line))) => {
-                        if let Err(e) = session
-                            .write_response_body(Some(Bytes::from(line.clone())), false)
-                            .await
-                        {
-                            if is_client_disconnect(&e) {
-                                tracing::warn!("client disconnected; aborting stream");
-                                self.metrics.inc_client_disconnect();
-                            } else {
-                                tracing::warn!(error=%e,"non-disconnect write error; aborting stream");
+                        // Render for the active frontend dialect; the
+                        // Anthropic renderer may emit zero frames for a
+                        // given upstream chunk.
+                        let rendered = match anthropic_renderer {
+                            Some(ref mut r) => r.feed(&line).join(""),
+                            None => line,
+                        };
+                        if rendered.is_empty() {
+                            continue;
+                        }
+                        match write_chunk(session, &rendered).await {
+                            Ok(len) => {
+                                chunks += 1;
+                                bytes_out += len;
                             }
-                            client_gone = true;
-                        } else {
-                            chunks += 1;
-                            bytes_out += line.len();
+                            Err(e) => {
+                                if is_client_disconnect(&e) {
+                                    tracing::warn!("client disconnected; aborting stream");
+                                    self.metrics.inc_client_disconnect();
+                                } else {
+                                    tracing::warn!(error=%e,"non-disconnect write error; aborting stream");
+                                }
+                                client_gone = true;
+                            }
                         }
                     }
                     Ok(Some(Err(e))) => {

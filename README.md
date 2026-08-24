@@ -147,6 +147,8 @@ echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-1
 ## Features
 
 - **OpenAI-compatible** — `/v1/chat/completions` (stream + non-stream)
+- **Anthropic-compatible** — `/v1/messages` (stream + non-stream): Claude SDKs
+  and Anthropic-protocol harnesses work against any configured provider
 - **Streaming** — full SSE translation (text, reasoning, tool calls)
 - **Tool calls** — OpenAI function calling ↔ Command Code tool-call format
 - **Multi-account auth** — vault at `~/.cmdcode/accounts.json` with TUI
@@ -196,7 +198,8 @@ echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-1
 | `GET` | `/v1/models` | List available models |
 | `GET` | `/health` | Health check (status, version, upstream) |
 | `GET` | `/metrics` | Prometheus-formatted metrics |
-| `POST` | `/v1/chat/completions` | Chat completion (stream + non-stream) |
+| `POST` | `/v1/chat/completions` | OpenAI chat completion (stream + non-stream) |
+| `POST` | `/v1/messages` | Anthropic messages API (stream + non-stream) |
 
 See [Setup guide](docs/setup.md) for supervision, log rotation, and soak tooling.
 
