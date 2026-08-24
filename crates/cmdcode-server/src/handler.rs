@@ -583,7 +583,8 @@ impl CommandCodeProxy {
         let mut models: Vec<serde_json::Value> = Vec::new();
 
         // Declared provider models first (opencode-style providers map).
-        for m in &self.upstream_client.router.models {
+        let router = self.upstream_client.router.get().await;
+        for m in &router.models {
             if let Some(id) = m.get("id").and_then(|v| v.as_str()) {
                 seen.insert(id.to_string());
             }

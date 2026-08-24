@@ -34,8 +34,8 @@ pub struct UpstreamClient {
     pub metrics: Arc<Metrics>,
     /// Concurrency limiter (None = unlimited).
     pub semaphore: Option<Arc<Semaphore>>,
-    /// Provider router — resolves which upstream serves each model.
-    pub router: crate::providers::ProviderRouter,
+    /// Shared hot-reloadable provider router.
+    pub router: Arc<crate::providers::RouterHandle>,
 }
 
 impl UpstreamClient {
@@ -57,7 +57,11 @@ impl UpstreamClient {
             Some(Arc::new(Semaphore::new(config.max_concurrent)))
         };
 
-        let router = crate::providers::ProviderRouter::from_env(&config, auth.clone());
+        let router = Arc::new(crate::providers::RouterHandle::new(
+            crate::providers::ProviderRouter::from_env(&config, auth.clone()),
+            config.clone(),
+            auth.clone(),
+        ));
 
         Self {
             http,
@@ -102,8 +106,10 @@ impl UpstreamClient {
             None
         };
 
-        // Route to the provider that declares this model (default fallback).
-        let provider = self.router.resolve(model.as_str()).clone();
+        // Pick up providers.json edits without a restart.
+        self.router.reload_if_changed().await;
+        let router = self.router.get().await;
+        let provider = router.resolve(model.as_str()).clone();
 
         let mut headers = provider.headers(&self.auth, &cwd).await?;
 

@@ -1,4 +1,5 @@
 pub mod config;
+pub mod connect;
 pub mod models;
 pub mod serve;
 pub mod setup;

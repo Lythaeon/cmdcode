@@ -198,6 +198,18 @@ impl Provider for CommandCodeProvider {
         is_auth_rejected(status)
     }
 
+    fn should_rotate(&self, status: u16, error_body: &str) -> bool {
+        // Credit/limit exhaustion comes back as 400 BAD_REQUEST with a
+        // message — rotate to another account just like an auth rejection.
+        if is_auth_rejected(status) {
+            return true;
+        }
+        let lower = error_body.to_lowercase();
+        lower.contains("insufficient credits")
+            || lower.contains("credit")
+                && (lower.contains("exhaust") || lower.contains("purchase more"))
+    }
+
     async fn on_auth_rejected(&self, auth: &AuthManager) -> Option<String> {
         auth.on_auth_rejected().await
     }

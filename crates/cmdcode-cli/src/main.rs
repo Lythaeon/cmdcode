@@ -5,7 +5,7 @@ mod cli;
 mod commands;
 
 use clap::Parser;
-use cli::{AuthCommand, Cli, Commands, SetupCommand};
+use cli::{AuthCommand, ConnectCommand, Cli, Commands, SetupCommand};
 
 fn main() {
     let cli = Cli::parse();
@@ -41,6 +41,15 @@ fn main() {
             Some(AuthCommand::AutoRotate { state }) => auth::toggle_auto_rotate(state.as_deref()),
         },
         Commands::Test => commands::test::run(),
+        Commands::Connect { command } => match command {
+            None => commands::connect::list(),
+            Some(ConnectCommand::List) => commands::connect::list(),
+            Some(ConnectCommand::Add) => commands::connect::add(),
+            Some(ConnectCommand::Remove { name }) => commands::connect::remove(&name),
+            Some(ConnectCommand::Test { name }) => {
+                commands::connect::test(&name);
+            }
+        },
         Commands::Setup { command } => match command {
             SetupCommand::All { dry_run, force } => {
                 commands::setup::run_all(dry_run, force);

@@ -67,6 +67,15 @@ pub trait Provider: Send + Sync {
         model: &str,
     ) -> Result<serde_json::Value, UpstreamError>;
 
+    /// Whether an upstream failure indicates the credential/account can no
+    /// longer serve requests (auth rejected OR credit/limit exhaustion) and
+    /// rotation should be attempted. Receives the error body for
+    /// message-based detection (e.g. "insufficient credits").
+    fn should_rotate(&self, status: u16, error_body: &str) -> bool {
+        let _ = error_body;
+        self.is_auth_rejected(status)
+    }
+
     /// Whether an HTTP status indicates credential rejection.
     fn is_auth_rejected(&self, status: u16) -> bool;
 
@@ -88,6 +97,60 @@ pub struct ProviderRouter {
     pub by_model: std::collections::HashMap<String, Arc<dyn Provider>>,
     /// Aggregated model list across all providers (`/v1/models`).
     pub models: Vec<serde_json::Value>,
+    /// Config file path this router was built from (for hot reload), when
+    /// a declarative config was used.
+    pub source_path: Option<std::path::PathBuf>,
+    /// mtime of the config at build time.
+    pub source_mtime: Option<std::time::SystemTime>,
+}
+
+/// Shared, hot-reloadable router handle.
+///
+/// `reload_if_changed` stats the declarative config and swaps the router
+/// in-place when it changed, so provider edits apply on the next request
+/// without restarting the proxy. Env-only setups never reload (nothing to
+/// watch).
+pub struct RouterHandle {
+    inner: tokio::sync::RwLock<Arc<ProviderRouter>>,
+    config: Arc<cmdcode_core::config::ProxyConfig>,
+    auth: Arc<AuthManager>,
+}
+
+impl RouterHandle {
+    pub fn new(
+        router: ProviderRouter,
+        config: Arc<cmdcode_core::config::ProxyConfig>,
+        auth: Arc<AuthManager>,
+    ) -> Self {
+        Self {
+            inner: tokio::sync::RwLock::new(Arc::new(router)),
+            config,
+            auth,
+        }
+    }
+
+    /// Current router snapshot.
+    pub async fn get(&self) -> Arc<ProviderRouter> {
+        self.inner.read().await.clone()
+    }
+
+    /// Rebuild the router when the config file's mtime changed since the
+    /// last build. Cheap stat per call; safe to run on every request.
+    pub async fn reload_if_changed(&self) {
+        let current = self.get().await;
+        let Some(path) = &current.source_path else {
+            return; // env-only setup — nothing to watch
+        };
+        let mtime = std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .ok();
+        if mtime == current.source_mtime {
+            return;
+        }
+        let fresh = ProviderRouter::from_env(&self.config, self.auth.clone());
+        *self.inner.write().await = Arc::new(fresh);
+        tracing::info!(path = %path.display(), "providers config reloaded");
+    }
 }
 
 impl ProviderRouter {
@@ -122,12 +185,19 @@ impl ProviderRouter {
                 default,
                 by_model: std::collections::HashMap::new(),
                 models: Vec::new(),
+                source_path: None,
+                source_mtime: None,
             };
         };
 
         let mut by_model = std::collections::HashMap::new();
         let mut models = Vec::new();
         let mut default: Option<Arc<dyn Provider>> = None;
+        let source_path = cmdcode_core::provider_config::ProvidersConfig::default_path();
+        let source_mtime = source_path
+            .as_ref()
+            .and_then(|p| std::fs::metadata(p).ok())
+            .and_then(|m| m.modified().ok());
 
         for (key, entry) in cfg.entries() {
             let provider: Arc<dyn Provider> = match entry.kind() {
@@ -166,7 +236,8 @@ impl ProviderRouter {
             default,
             by_model,
             models,
+            source_path,
+            source_mtime,
         }
     }
 }
-

@@ -58,6 +58,15 @@ pub enum Commands {
         long_about = "Start the proxy temporarily, send a minimal chat completion request,\nand verify the response. Checks: auth validity, upstream connectivity,\nand wire format translation.\n\nExits with code 0 on success, 1 on failure.\n\nRequires the proxy to NOT be already running on the configured port."
     )]
     Test,
+    /// Manage upstream provider connections (providers.json)
+    #[command(
+        about = "Manage upstream provider connections",
+        long_about = "Add, list, remove and test upstream providers declared in\n~/.cmdcode/providers.json. Changes hot-reload — no proxy restart needed."
+    )]
+    Connect {
+        #[command(subcommand)]
+        command: Option<ConnectCommand>,
+    },
 
     /// Configure client harnesses to use the proxy
     #[command(
@@ -178,6 +187,25 @@ pub enum SetupCommand {
 
         #[arg(long)]
         force: bool,
+    },
+}
+
+/// Subcommands for `cmdcode connect`.
+#[derive(Debug, clap::Subcommand)]
+pub enum ConnectCommand {
+    /// Add a provider interactively
+    Add,
+    /// Remove a provider by id
+    Remove {
+        /// Provider id from providers.json
+        name: String,
+    },
+    /// List configured providers
+    List,
+    /// Probe a provider's endpoint connectivity
+    Test {
+        /// Provider id from providers.json
+        name: String,
     },
 }
 
