@@ -18,9 +18,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     if let Some(ref log_file) = config.log_file {
         let writer = RotatingLog::new(log_file.clone(), config.log_max_bytes, config.log_keep)?;
-        fmt.with_writer(writer).init();
+        fmt.with_writer(writer)
+            .try_init()
+            .map_err(|e| format!("failed to install log subscriber: {e}"))?;
     } else {
-        fmt.init();
+        fmt.try_init()
+            .map_err(|e| format!("failed to install log subscriber: {e}"))?;
     }
 
     let auth = AuthManager::with_vault(

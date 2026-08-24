@@ -8,16 +8,19 @@ use clap::Parser;
 use cli::{AuthCommand, Cli, Commands, SetupCommand};
 
 fn main() {
-    // Initialize tracing for CLI output
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .with_target(false)
-        .try_init();
-
     let cli = Cli::parse();
+
+    // Serve installs its own subscriber (optionally writing to the rotating
+    // log file), so skip the default stdout subscriber on that path.
+    if !matches!(cli.command, Commands::Serve) {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            )
+            .with_target(false)
+            .try_init();
+    }
 
     match cli.command {
         Commands::Serve => {
