@@ -149,6 +149,9 @@ echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-1
 - **OpenAI-compatible** — `/v1/chat/completions` (stream + non-stream)
 - **Anthropic-compatible** — `/v1/messages` (stream + non-stream): Claude SDKs
   and Anthropic-protocol harnesses work against any configured provider
+- **Google Gemini** — `:generateContent` / `:streamGenerateContent`
+- **OpenAI Responses API** — `/v1/responses` (stateless subset)
+- **Ollama-native** — `/api/chat` + `/api/tags`
 - **Streaming** — full SSE translation (text, reasoning, tool calls)
 - **Tool calls** — OpenAI function calling ↔ Command Code tool-call format
 - **Multi-account auth** — vault at `~/.cmdcode/accounts.json` with TUI
@@ -200,6 +203,9 @@ echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-1
 | `GET` | `/metrics` | Prometheus-formatted metrics |
 | `POST` | `/v1/chat/completions` | OpenAI chat completion (stream + non-stream) |
 | `POST` | `/v1/messages` | Anthropic messages API (stream + non-stream) |
+| `POST` | `/v1/responses` | OpenAI Responses API (stateless) |
+| `POST` | `…:generateContent` / `…:streamGenerateContent` | Google Gemini |
+| `GET`/`POST` | `/api/tags`, `/api/chat` | Ollama native |
 
 See [Setup guide](docs/setup.md) for supervision, log rotation, and soak tooling.
 

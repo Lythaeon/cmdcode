@@ -19,6 +19,55 @@ use tokio_util::sync::CancellationToken;
 use crate::metrics::Metrics;
 use crate::upstream::{self, UpstreamClient};
 
+/// Which client protocol the request arrived in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Frontend {
+    /// `/v1/chat/completions` (identity).
+    OpenAi,
+    /// `/v1/messages` (Anthropic).
+    Anthropic,
+    /// `:generateContent` / `:streamGenerateContent` (Gemini).
+    Gemini,
+    /// `/v1/responses` (OpenAI Responses API).
+    Responses,
+    /// `/api/chat` (Ollama native).
+    Ollama,
+}
+
+/// Per-frontend downstream stream renderers. Each consumes the
+/// provider-emitted OpenAI SSE payload and produces dialect frames.
+enum StreamRenderer {
+    Anthropic(cmdcode_core::anthropic_wire::AnthropicStreamRenderer),
+    Gemini(cmdcode_core::gemini_wire::GeminiStreamRenderer),
+    Responses(cmdcode_core::responses_wire::ResponsesStreamRenderer),
+    Ollama(cmdcode_core::ollama_wire::OllamaStreamRenderer),
+}
+
+impl StreamRenderer {
+    fn feed(&mut self, payload: &str) -> Vec<String> {
+        match self {
+            Self::Anthropic(r) => r.feed(payload),
+            Self::Gemini(r) => r.feed(payload),
+            Self::Responses(r) => r.feed(payload),
+            Self::Ollama(r) => r.feed(payload),
+        }
+    }
+}
+
+/// Classify an inbound chat path.
+fn detect_frontend(path: &str) -> Frontend {
+    let p = path.trim_end_matches('/');
+    if p.contains(":generateContent") || p.contains(":streamGenerateContent") {
+        return Frontend::Gemini;
+    }
+    match p {
+        "/v1/messages" | "/messages" => Frontend::Anthropic,
+        "/v1/responses" | "/responses" => Frontend::Responses,
+        "/api/chat" => Frontend::Ollama,
+        _ => Frontend::OpenAi,
+    }
+}
+
 /// Pingora proxy handler that forwards requests to Command Code.
 pub struct CommandCodeProxy {
     /// Proxy configuration.
@@ -150,6 +199,22 @@ impl ProxyHttp for CommandCodeProxy {
             "/v1/messages" | "/messages" if method == http::Method::POST => {
                 // Anthropic frontend — continue to upstream
             }
+            "/v1/responses" | "/responses" if method == http::Method::POST => {
+                // OpenAI Responses API frontend — continue to upstream
+            }
+            "/api/chat" if method == http::Method::POST => {
+                // Ollama-native chat frontend — continue to upstream
+            }
+            "/api/tags" if method == http::Method::GET => {
+                self.handle_ollama_tags(session).await?;
+                return Ok(true);
+            }
+            p if method == http::Method::POST && p.contains(":generateContent") => {
+                // Gemini frontend (non-streaming) — continue to upstream
+            }
+            p if method == http::Method::POST && p.contains(":streamGenerateContent") => {
+                // Gemini frontend (streaming) — continue to upstream
+            }
             _ => {
                 self.metrics.inc_unknown_route();
                 let err = serde_json::json!({
@@ -165,7 +230,7 @@ impl ProxyHttp for CommandCodeProxy {
 
         // Optional incoming-auth gate. /health and /metrics stay open for
         // monitors and scrapers; every other route requires the token.
-        let is_anthropic_frontend = path.trim_end_matches('/').ends_with("/messages");
+        let frontend = detect_frontend(&path);
         let api_key = if let Some(ref expected) = self.config.incoming_token {
             let headers = &session.req_header().headers;
             let bearer = headers
@@ -244,48 +309,131 @@ impl ProxyHttp for CommandCodeProxy {
             }
         }
 
-        // Anthropic frontend converts /v1/messages bodies to the internal
-        // OpenAI-format request; OpenAI frontend parses directly.
-        let anthropic_request: Option<cmdcode_core::anthropic_wire::AnthropicRequest> =
-            if is_anthropic_frontend {
-                match serde_json::from_slice::<Value>(&body_bytes) {
-                    Ok(raw) => match serde_json::from_value::<
-                        cmdcode_core::anthropic_wire::AnthropicRequest,
-                    >(raw) {
-                        Ok(areq) => Some(areq),
-                        Err(e) => {
-                            self.metrics.inc_bad_requests();
-                            let err = serde_json::json!({
-                                "type": "error",
-                                "error": {
-                                    "type": "invalid_request_error",
-                                    "message": format!("Invalid request body: {}", e),
-                                }
-                            });
-                            self.send_json(session, 400, &err).await?;
-                            return Ok(true);
-                        }
-                    },
-                    Err(e) => {
-                        self.metrics.inc_bad_requests();
-                        let err = serde_json::json!({
-                            "type": "error",
-                            "error": {
-                                "type": "invalid_request_error",
-                                "message": format!("Invalid JSON body: {}", e),
-                            }
-                        });
-                        self.send_json(session, 400, &err).await?;
-                        return Ok(true);
+        // Frontend adapters convert protocol-specific bodies into the
+        // internal OpenAI-format request; the OpenAI frontend parses directly.
+        // Frontend adapters convert protocol-specific bodies into the
+        // internal OpenAI-format request; the OpenAI frontend parses directly.
+        let raw_body: Value = match serde_json::from_slice(&body_bytes) {
+            Ok(v) => v,
+            Err(e) => {
+                self.metrics.inc_bad_requests();
+                let err = serde_json::json!({
+                    "error": {
+                        "message": format!("Invalid JSON body: {}", e),
+                        "type": "invalid_request_error"
                     }
-                }
-            } else {
-                None
-            };
+                });
+                self.send_json(session, 400, &err).await?;
+                return Ok(true);
+            }
+        };
 
-        let body: ChatCompletionRequest = match &anthropic_request {
-            Some(areq) => areq.to_chat_completion(),
-            None => match serde_json::from_slice(&body_bytes) {
+        let mut gemini_model: Option<String> = None;
+        let mut anthropic_request: Option<
+            cmdcode_core::anthropic_wire::AnthropicRequest,
+        > = None;
+        let mut responses_request: Option<
+            cmdcode_core::responses_wire::ResponsesRequest,
+        > = None;
+        let mut ollama_request: Option<cmdcode_core::ollama_wire::OllamaChatRequest> =
+            None;
+        let mut gemini_request: Option<cmdcode_core::gemini_wire::GeminiRequest> = None;
+
+        if frontend == Frontend::Gemini {
+            // Path shape: .../models/{model}:generateContent[:stream]
+            let model_seg = path
+                .rsplit_once("/models/")
+                .and_then(|(_, rest)| rest.split(':').next())
+                .unwrap_or("");
+            gemini_model = Some(model_seg.to_string());
+            match serde_json::from_value::<cmdcode_core::gemini_wire::GeminiRequest>(
+                raw_body,
+            ) {
+                Ok(r) => gemini_request = Some(r),
+                Err(e) => {
+                    self.metrics.inc_bad_requests();
+                    self.send_json(
+                        session,
+                        400,
+                        &serde_json::json!({"error": {"code": 400, "message":
+                            format!("Invalid request body: {e}"), "status": "INVALID_ARGUMENT"}}),
+                    )
+                    .await?;
+                    return Ok(true);
+                }
+            }
+        } else if frontend == Frontend::Anthropic {
+            match serde_json::from_value::<
+                cmdcode_core::anthropic_wire::AnthropicRequest,
+            >(raw_body)
+            {
+                Ok(r) => anthropic_request = Some(r),
+                Err(e) => {
+                    self.metrics.inc_bad_requests();
+                    return self
+                        .send_json(
+                            session,
+                            400,
+                            &serde_json::json!({
+                                "type": "error",
+                                "error": {"type": "invalid_request_error",
+                                    "message": format!("Invalid request body: {e}")},
+                            }),
+                        )
+                        .await.map(|()| true);
+                }
+            }
+        } else if frontend == Frontend::Responses {
+            match serde_json::from_value::<
+                cmdcode_core::responses_wire::ResponsesRequest,
+            >(raw_body)
+            {
+                Ok(r) => responses_request = Some(r),
+                Err(e) => {
+                    self.metrics.inc_bad_requests();
+                    return self
+                        .send_json(
+                            session,
+                            400,
+                            &serde_json::json!({"error": {"message":
+                                format!("Invalid request body: {e}"),
+                                "type": "invalid_request_error"}}),
+                        )
+                        .await.map(|()| true);
+                }
+            }
+        } else if frontend == Frontend::Ollama {
+            match serde_json::from_value::<
+                cmdcode_core::ollama_wire::OllamaChatRequest,
+            >(raw_body)
+            {
+                Ok(r) => ollama_request = Some(r),
+                Err(e) => {
+                    self.metrics.inc_bad_requests();
+                    return self
+                        .send_json(
+                            session,
+                            400,
+                            &serde_json::json!({"error": format!("Invalid request body: {e}")}),
+                        )
+                        .await.map(|()| true);
+                }
+            }
+        }
+
+        let body: ChatCompletionRequest = if let Some(areq) = &anthropic_request {
+            areq.to_chat_completion()
+        } else if let Some(greq) = &gemini_request {
+            let mut cc = greq.to_chat_completion();
+            cc.model = gemini_model.clone();
+            cc.stream = Some(path.contains(":streamGenerateContent"));
+            cc
+        } else if let Some(rreq) = &responses_request {
+            rreq.to_chat_completion()
+        } else if let Some(oreq) = &ollama_request {
+            oreq.to_chat_completion()
+        } else {
+            match serde_json::from_slice(&body_bytes) {
                 Ok(b) => b,
                 Err(e) => {
                     self.metrics.inc_bad_requests();
@@ -298,7 +446,7 @@ impl ProxyHttp for CommandCodeProxy {
                     self.send_json(session, 400, &err).await?;
                     return Ok(true);
                 }
-            },
+            }
         };
 
         // Validate model
@@ -346,20 +494,47 @@ impl ProxyHttp for CommandCodeProxy {
                     elapsed_ms = start.elapsed().as_millis() as u64,
                     "completed (non-stream)"
                 );
-                let out = match &anthropic_request {
-                    Some(_) => cmdcode_core::anthropic_wire::completion_to_anthropic(
+                let out = match frontend {
+                    Frontend::Anthropic => cmdcode_core::anthropic_wire::completion_to_anthropic(
                         &completion,
                         model.as_str(),
                     ),
-                    None => completion,
+                    Frontend::Gemini => cmdcode_core::gemini_wire::completion_to_gemini(
+                        &completion,
+                        model.as_str(),
+                    ),
+                    Frontend::Responses => {
+                        cmdcode_core::responses_wire::completion_to_responses(
+                            &completion,
+                            model.as_str(),
+                        )
+                    }
+                    Frontend::Ollama => cmdcode_core::ollama_wire::completion_to_ollama(
+                        &completion,
+                        model.as_str(),
+                    ),
+                    Frontend::OpenAi => completion,
                 };
                 self.metrics.inc_bytes_out(out.to_string().len());
                 self.send_json(session, 200, &out).await?;
                 Ok(true)
             }
             Ok(upstream::UpstreamResponse::Sse { rx, cancel }) => {
-                let renderer = anthropic_request
-                    .map(|_| cmdcode_core::anthropic_wire::AnthropicStreamRenderer::new());
+                let renderer = match frontend {
+                    Frontend::Anthropic => Some(StreamRenderer::Anthropic(
+                        cmdcode_core::anthropic_wire::AnthropicStreamRenderer::new(),
+                    )),
+                    Frontend::Gemini => Some(StreamRenderer::Gemini(
+                        cmdcode_core::gemini_wire::GeminiStreamRenderer::new(),
+                    )),
+                    Frontend::Responses => Some(StreamRenderer::Responses(
+                        cmdcode_core::responses_wire::ResponsesStreamRenderer::new(),
+                    )),
+                    Frontend::Ollama => Some(StreamRenderer::Ollama(
+                        cmdcode_core::ollama_wire::OllamaStreamRenderer::new(model.as_str()),
+                    )),
+                    Frontend::OpenAi => None,
+                };
                 self.handle_sse_stream(
                     session,
                     rx,
@@ -430,7 +605,7 @@ impl CommandCodeProxy {
         body: &ChatCompletionRequest,
         effort: Option<Effort>,
         start: std::time::Instant,
-        mut anthropic_renderer: Option<cmdcode_core::anthropic_wire::AnthropicStreamRenderer>,
+        mut anthropic_renderer: Option<StreamRenderer>,
     ) -> PingoraResult<bool> {
         tracing::info!(
             elapsed_ms = start.elapsed().as_millis() as u64,
@@ -680,6 +855,36 @@ impl CommandCodeProxy {
             "completed (stream)"
         );
         Ok(true)
+    }
+
+    /// Ollama-native model listing (`GET /api/tags`).
+    async fn handle_ollama_tags(&self, session: &mut Session) -> PingoraResult<()> {
+        let router = self.upstream_client.router.get().await;
+        let mut names: Vec<Value> = Vec::new();
+        for m in &router.models {
+            if let Some(id) = m.get("id").and_then(|v| v.as_str()) {
+                names.push(serde_json::json!({
+                    "name": id,
+                    "model": id,
+                    "modified_at": "2024-01-01T00:00:00Z",
+                    "size": 0,
+                    "digest": "",
+                }));
+            }
+        }
+        let catalog = get_model_catalog();
+        for id in catalog.keys() {
+            names.push(serde_json::json!({
+                "name": id.as_ref(),
+                "model": id.as_ref(),
+                "modified_at": "2024-01-01T00:00:00Z",
+                "size": 0,
+                "digest": "",
+            }));
+        }
+        self.send_json(session, 200, &serde_json::json!({ "models": names }))
+            .await?;
+        Ok(())
     }
 
     async fn handle_models(&self, session: &mut Session) -> PingoraResult<()> {

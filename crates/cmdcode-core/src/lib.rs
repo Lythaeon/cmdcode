@@ -20,6 +20,15 @@ pub mod error;
 /// model catalog.
 pub mod model_catalog;
 
+/// Google Gemini wire protocol adapter.
+pub mod gemini_wire;
+
+/// OpenAI Responses API (`/v1/responses`) adapter.
+pub mod responses_wire;
+
+/// Ollama-native protocol adapter.
+pub mod ollama_wire;
+
 /// Declarative upstream-provider configuration (opencode-style providers map).
 /// provider config.
 pub mod provider_config;
