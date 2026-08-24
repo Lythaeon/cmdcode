@@ -127,7 +127,7 @@ impl UpstreamClient {
             taste_section,
         });
 
-        let url = provider.endpoint();
+        let url = provider.endpoint(model.as_str(), body.stream.unwrap_or(false));
 
         let mut last_err: Option<UpstreamError> = None;
         let max_attempts = 1 + self.config.max_retries;
@@ -313,7 +313,7 @@ impl UpstreamClient {
                                                                                                 .unwrap_or_default()
                                                                                                 .trim();
                                                                                                 if !line.is_empty() {
-                                                                                                    match translate_line(
+                                                                                                    match provider_for_task.translate_line(
                                                                                                         line, &mut state,
                                                                                                     ) {
                                                                                                         LineOutcome::Skip => {}

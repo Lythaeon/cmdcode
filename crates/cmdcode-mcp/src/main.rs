@@ -134,6 +134,13 @@ fn resolve_learning_target() -> LearningTarget {
                     api_key: entry.api_key(),
                     model,
                 },
+                // Native Anthropic/Gemini upstreams speak proprietary wire
+                // formats; the MCP learning path only supports command-code
+                // and OpenAI-compatible targets (filtered above).
+                _ => return LearningTarget::CommandCode {
+                    url: format!("{}/alpha/generate", upstream_url()),
+                    model: upstream_model(),
+                },
             };
         }
     }

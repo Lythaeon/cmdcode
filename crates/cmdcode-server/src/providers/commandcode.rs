@@ -24,7 +24,7 @@ impl Provider for CommandCodeProvider {
         "command-code"
     }
 
-    fn endpoint(&self) -> String {
+    fn endpoint(&self, _model: &str, _streaming: bool) -> String {
         format!("{}/alpha/generate", self.base_url.trim_end_matches('/'))
     }
 

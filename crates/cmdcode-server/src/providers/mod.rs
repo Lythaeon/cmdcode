@@ -8,7 +8,9 @@
 //! - `command-code` (default): Command Code `/alpha/generate` NDJSON protocol
 //! - `openai`: pass-through for any OpenAI-compatible endpoint
 
+pub mod anthropic;
 pub mod commandcode;
+pub mod gemini;
 pub mod openai;
 
 use cmdcode_core::auth::AuthManager;
@@ -39,8 +41,9 @@ pub trait Provider: Send + Sync {
     /// Adapter identifier (also the `COMMAND_CODE_PROXY_PROVIDER` value).
     fn name(&self) -> &'static str;
 
-    /// Full endpoint URL for chat completions.
-    fn endpoint(&self) -> String;
+    /// Full endpoint URL for chat completions. `streaming` selects the
+    /// upstream's streaming route when a provider distinguishes them.
+    fn endpoint(&self, model: &str, streaming: bool) -> String;
 
     /// Identity/auth headers for an upstream call.
     async fn headers(
@@ -95,7 +98,7 @@ impl Provider for NoEnabledProvider {
         "none"
     }
 
-    fn endpoint(&self) -> String {
+    fn endpoint(&self, _model: &str, _streaming: bool) -> String {
         "http://cmdcode.invalid/disabled".into()
     }
 
@@ -304,6 +307,22 @@ impl ProviderRouter {
                     base_url: entry.base_url().unwrap_or_else(|| "http://localhost".into()),
                     api_key: entry.api_key(),
                 }),
+                cmdcode_core::provider_config::AdapterKind::Anthropic => {
+                    Arc::new(anthropic::AnthropicProvider {
+                        base_url: entry
+                            .base_url()
+                            .unwrap_or_else(|| "https://api.anthropic.com".into()),
+                        api_key: entry.api_key(),
+                    })
+                }
+                cmdcode_core::provider_config::AdapterKind::Gemini => {
+                    Arc::new(gemini::GeminiProvider {
+                        base_url: entry
+                            .base_url()
+                            .unwrap_or_else(|| gemini::DEFAULT_BASE.into()),
+                        api_key: entry.api_key(),
+                    })
+                }
                 cmdcode_core::provider_config::AdapterKind::CommandCode => Arc::new(
                     commandcode::CommandCodeProvider {
                         auth: auth.clone(),
@@ -376,6 +395,22 @@ impl ProviderRouter {
                                 base_url: entry
                                     .base_url()
                                     .unwrap_or_else(|| "http://localhost".into()),
+                                api_key: entry.api_key(),
+                            })
+                        }
+                        cmdcode_core::provider_config::AdapterKind::Anthropic => {
+                            Arc::new(anthropic::AnthropicProvider {
+                                base_url: entry
+                                    .base_url()
+                                    .unwrap_or_else(|| "https://api.anthropic.com".into()),
+                                api_key: entry.api_key(),
+                            })
+                        }
+                        cmdcode_core::provider_config::AdapterKind::Gemini => {
+                            Arc::new(gemini::GeminiProvider {
+                                base_url: entry
+                                    .base_url()
+                                    .unwrap_or_else(|| "https://generativelanguage.googleapis.com/v1beta".into()),
                                 api_key: entry.api_key(),
                             })
                         }

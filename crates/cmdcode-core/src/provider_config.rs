@@ -36,6 +36,10 @@ pub enum AdapterKind {
     CommandCode,
     /// Generic OpenAI-compatible chat completions.
     OpenAi,
+    /// Native Anthropic Messages API (`/v1/messages` upstream).
+    Anthropic,
+    /// Native Google Gemini API (`:generateContent` upstream).
+    Gemini,
 }
 
 impl AdapterKind {
@@ -44,6 +48,8 @@ impl AdapterKind {
         match s.to_lowercase().as_str() {
             "command-code" | "commandcode" | "cmd" => Some(Self::CommandCode),
             "openai" | "openai-compatible" => Some(Self::OpenAi),
+            "anthropic" | "claude" => Some(Self::Anthropic),
+            "gemini" | "google" => Some(Self::Gemini),
             _ => None,
         }
     }
@@ -250,6 +256,10 @@ mod tests {
         let entry: ProviderEntry =
             serde_json::from_str(r#"{"type":"command-code"}"#).unwrap();
         assert_eq!(entry.kind(), AdapterKind::CommandCode);
+        let entry: ProviderEntry = serde_json::from_str(r#"{"type":"anthropic"}"#).unwrap();
+        assert_eq!(entry.kind(), AdapterKind::Anthropic);
+        let entry: ProviderEntry = serde_json::from_str(r#"{"type":"gemini"}"#).unwrap();
+        assert_eq!(entry.kind(), AdapterKind::Gemini);
     }
 
     #[test]

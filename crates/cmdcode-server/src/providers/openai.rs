@@ -58,7 +58,7 @@ impl Provider for OpenAiProvider {
         "openai"
     }
 
-    fn endpoint(&self) -> String {
+    fn endpoint(&self, _model: &str, _streaming: bool) -> String {
         format!("{}/chat/completions", self.base_url.trim_end_matches('/'))
     }
 
