@@ -126,7 +126,10 @@ async fn handle_taste_call(instruction: &str) -> Result<String, String> {
         "skills": null,
         "permissionMode": "default",
         "threadId": uuid_v4(),
-        "mode": "agent",
+        // The CLI stamps feature purpose into `mode` via withUsageContext —
+        // "learning" is what attributes the call as taste usage on the
+        // dashboard. "agent" would lump it into regular chat usage.
+        "mode": "learning",
         "params": {
             "model": upstream_model(),
             "messages": [{"role": "user", "content": [{"type": "text", "text": user_msg}]}],
