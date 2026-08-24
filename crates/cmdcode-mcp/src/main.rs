@@ -202,7 +202,6 @@ async fn handle_taste_call(instruction: &str) -> Result<String, String> {
                         .and_then(|n| n.as_str())
                         .unwrap_or("")
                         .to_string();
-                    eprintln(&format!("stream: tool-input-start id={id} name={name}"));
                     pending.insert(id, (name, String::new()));
                 }
                 "tool-input-delta" => {
@@ -214,11 +213,7 @@ async fn handle_taste_call(instruction: &str) -> Result<String, String> {
                 "text-delta" => {
                     text_out.push_str(ev.get("delta").and_then(|d| d.as_str()).unwrap_or(""));
                 }
-                other => {
-                    if !other.is_empty() {
-                        eprintln(&format!("stream: {other}"));
-                    }
-                }
+                _ => {}
             }
         }
     }
