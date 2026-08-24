@@ -7,6 +7,8 @@ pub mod handler;
 pub mod logging;
 /// Prometheus-style metrics counters and rendering.
 pub mod metrics;
+/// Upstream provider adapters (command-code, openai, ...).
+pub mod providers;
 /// Upstream HTTP client with retry and SSE streaming.
 pub mod upstream;
 
@@ -209,6 +211,8 @@ mod tests {
             rate_limit_window_secs: 60,
             rate_limit_backend: cmdcode_core::types::RateLimitBackend::Local,
             rate_limit_redis_url: None,
+            provider: "command-code".to_string(),
+            provider_api_key: None,
         };
         let auth = AuthManager::new(config.auth_dir.clone(), 30);
         let _service = ProxyService::new(config, auth);

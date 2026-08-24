@@ -53,6 +53,10 @@ pub struct ProxyConfig {
     pub rate_limit_backend: RateLimitBackend,
     /// Rate limit: Redis URL (only used if backend is "redis").
     pub rate_limit_redis_url: Option<String>,
+    /// Upstream provider adapter: "command-code" (default) or "openai".
+    pub provider: String,
+    /// Bearer token for the "openai" provider adapter.
+    pub provider_api_key: Option<String>,
 }
 
 impl ProxyConfig {
@@ -182,6 +186,12 @@ impl ProxyConfig {
 
         let rate_limit_redis_url = env::var("COMMAND_CODE_PROXY_RATE_LIMIT_REDIS_URL").ok();
 
+        let provider = env::var("COMMAND_CODE_PROXY_PROVIDER")
+            .unwrap_or_else(|_| "command-code".to_string())
+            .to_lowercase();
+
+        let provider_api_key = env::var("COMMAND_CODE_UPSTREAM_API_KEY").ok();
+
         Ok(Self {
             listen_addr,
             upstream_url,
@@ -206,6 +216,8 @@ impl ProxyConfig {
             rate_limit_window_secs,
             rate_limit_backend,
             rate_limit_redis_url,
+            provider,
+            provider_api_key,
         })
     }
 }

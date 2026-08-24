@@ -1,10 +1,8 @@
 use cmdcode_core::auth::AuthManager;
 use cmdcode_core::config::ProxyConfig;
 use cmdcode_core::error::UpstreamError;
-use cmdcode_core::types::{Effort, FinishReason, ModelId};
-use cmdcode_core::wire_format::{
-    build_completion, wire_messages, wire_tools, CcUsage, ChatCompletionRequest, UpstreamEvent,
-};
+use cmdcode_core::types::{Effort, ModelId};
+use cmdcode_core::wire_format::{ChatCompletionRequest, UpstreamEvent};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Semaphore};
@@ -36,6 +34,8 @@ pub struct UpstreamClient {
     pub metrics: Arc<Metrics>,
     /// Concurrency limiter (None = unlimited).
     pub semaphore: Option<Arc<Semaphore>>,
+    /// Active upstream provider adapter.
+    pub provider: Arc<dyn crate::providers::Provider>,
 }
 
 impl UpstreamClient {
@@ -57,12 +57,15 @@ impl UpstreamClient {
             Some(Arc::new(Semaphore::new(config.max_concurrent)))
         };
 
+        let provider = Arc::from(crate::providers::from_config(&config, auth.clone()));
+
         Self {
             http,
             config,
             auth,
             metrics,
             semaphore,
+            provider,
         }
     }
 
@@ -92,72 +95,27 @@ impl UpstreamClient {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| ".".to_string());
 
+        // Rendered taste section (provider decides where it goes).
+        let taste_section = if self.taste_enabled().await {
+            Some(read_taste_content(&self.config.auth_dir, &cwd).await)
+        } else {
+            None
+        };
+
         let mut headers = self
-            .auth
-            .build_headers(&cwd)
-            .await
-            .map_err(|e| UpstreamError::Io(std::io::Error::other(e.to_string())))?;
+            .provider
+            .headers(&self.auth, &cwd)
+            .await?;
 
-        let wire_msgs = wire_messages(&body.messages);
-        let wire_tools = wire_tools(body.tools.as_deref().unwrap_or_default());
-        let max_tokens = body.max_tokens.unwrap_or(64000);
-
-        let mut params = serde_json::json!({
-            "model": model.as_str(),
-            "messages": wire_msgs,
-            "tools": wire_tools,
-            "max_tokens": max_tokens,
-            "stream": true,
-        });
-        let params_obj = params.as_object_mut().expect("params is an object");
-
-        if let Some(system) = extract_system(&body.messages) {
-            // Prepend the taste section if taste learning is enabled.
-            // Mirrors the CLI: always rendered, with a "no preferences yet"
-            // block when empty so the agent knows learning is active.
-            let system = if self.taste_enabled().await {
-                format!("{}\n\n{system}", read_taste_content(&self.config.auth_dir, &cwd).await)
-            } else {
-                system
-            };
-            params_obj.insert("system".into(), serde_json::Value::String(system));
-        }
-        if let Some(t) = body.temperature {
-            params_obj.insert("temperature".into(), serde_json::json!(t));
-        }
-        if let Some(e) = effort {
-            params_obj.insert("reasoning_effort".into(), serde_json::json!(e.as_str()));
-        }
-        if let Some(p) = body.top_p {
-            params_obj.insert("top_p".into(), serde_json::json!(p));
-        }
-        if let Some(fp) = body.frequency_penalty {
-            params_obj.insert("frequency_penalty".into(), serde_json::json!(fp));
-        }
-        if let Some(pp) = body.presence_penalty {
-            params_obj.insert("presence_penalty".into(), serde_json::json!(pp));
-        }
-        if let Some(stop) = &body.stop {
-            params_obj.insert(
-                "stop".into(),
-                serde_json::to_value(stop).unwrap_or_default(),
-            );
-        }
-        if let Some(user) = &body.user {
-            params_obj.insert("user".into(), serde_json::json!(user));
-        }
-
-        let upstream_body = serde_json::json!({
-            "config": build_config(&cwd),
-            "memory": null,
-            "taste": null,
-            "skills": null,
-            "permissionMode": "standard",
-            "mode": "agent",
-            "params": params,
+        let upstream_body = self.provider.build_body(&crate::providers::RequestContext {
+            model,
+            body,
+            effort,
+            cwd: &cwd,
+            taste_section,
         });
 
-        let url = format!("{}/alpha/generate", self.config.upstream_url);
+        let url = self.provider.endpoint(&self.config.upstream_url);
 
         let mut last_err: Option<UpstreamError> = None;
         let max_attempts = 1 + self.config.max_retries;
@@ -183,8 +141,14 @@ impl UpstreamClient {
                                         status,
                                         body: err.to_string(),
                                     };
-                                    if is_auth_rejected(status) && !auth_retried {
-                                        if let Some(name) = self.auth.on_auth_rejected().await {
+                                    if self.provider.is_auth_rejected(status)
+                                        && !auth_retried
+                                    {
+                                        if let Some(name) = self
+                                            .provider
+                                            .on_auth_rejected(&self.auth)
+                                            .await
+                                        {
                                             tracing::warn!(
                                                 account = %name,
                                                 status = status,
@@ -194,11 +158,7 @@ impl UpstreamClient {
                                             self.auth.invalidate_cache().await;
                                         }
                                         headers =
-                                            self.auth.build_headers(&cwd).await.map_err(|e| {
-                                                UpstreamError::Io(std::io::Error::other(
-                                                    e.to_string(),
-                                                ))
-                                            })?;
+                                            self.provider.headers(&self.auth, &cwd).await?;
                                         auth_retried = true;
                                         continue; // refresh once, not against the retry budget
                                     }
@@ -219,8 +179,8 @@ impl UpstreamClient {
                             status,
                             body: body_text,
                         };
-                        if is_auth_rejected(status) && !auth_retried {
-                            if let Some(name) = self.auth.on_auth_rejected().await {
+                        if self.provider.is_auth_rejected(status) && !auth_retried {
+                            if let Some(name) = self.provider.on_auth_rejected(&self.auth).await {
                                 tracing::warn!(
                                     account = %name,
                                     status = status,
@@ -229,9 +189,7 @@ impl UpstreamClient {
                             } else {
                                 self.auth.invalidate_cache().await;
                             }
-                            headers = self.auth.build_headers(&cwd).await.map_err(|e| {
-                                UpstreamError::Io(std::io::Error::other(e.to_string()))
-                            })?;
+                            headers = self.provider.headers(&self.auth, &cwd).await?;
                             auth_retried = true;
                             continue; // refresh once, not against the retry budget
                         }
@@ -251,91 +209,8 @@ impl UpstreamClient {
                             .text()
                             .await
                             .map_err(|e| UpstreamError::Io(std::io::Error::other(e.to_string())))?;
-                        let mut text_parts = Vec::new();
-                        let mut reasoning_parts = Vec::new();
-                        let mut tool_calls = Vec::new();
-                        let mut usage = CcUsage::default();
-                        let mut finish_reason = FinishReason::Stop;
-                        let mut saw_finish = false;
-
-                        for line in text.lines() {
-                            let line = line.trim();
-                            if line.is_empty() {
-                                continue;
-                            }
-                            if let Ok(evt) = serde_json::from_str::<UpstreamEvent>(line) {
-                                match evt.event_type.as_str() {
-                                    "text-delta" => {
-                                        if let Some(t) = evt.text {
-                                            text_parts.push(t);
-                                        }
-                                    }
-                                    "reasoning-delta" => {
-                                        if let Some(t) = evt.text {
-                                            reasoning_parts.push(t);
-                                        }
-                                    }
-                                    "tool-call" => {
-                                        tool_calls.push((
-                                            evt.tool_call_id.unwrap_or_default(),
-                                            evt.tool_name.unwrap_or_default(),
-                                            evt.input.unwrap_or(serde_json::Value::Null),
-                                        ));
-                                    }
-                                    "finish" => {
-                                        saw_finish = true;
-                                        if let Some(u) = evt.total_usage {
-                                            usage.input_tokens = u.input_tokens.unwrap_or(0);
-                                            usage.output_tokens = u.output_tokens.unwrap_or(0);
-                                            if let Some(d) = u.input_token_details {
-                                                usage.cache_read_tokens =
-                                                    d.cache_read_tokens.unwrap_or(0);
-                                            }
-                                        }
-                                        let raw = evt
-                                            .raw_finish_reason
-                                            .as_deref()
-                                            .or(evt.finish_reason.as_deref())
-                                            .unwrap_or("stop");
-                                        finish_reason = FinishReason::from_upstream(raw);
-                                    }
-                                    "error" => {
-                                        return Err(UpstreamError::HttpError {
-                                            status: 502,
-                                            body: evt
-                                                .error
-                                                .and_then(|e| e.message)
-                                                .unwrap_or_else(|| "stream error".into()),
-                                        });
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-
-                        if !saw_finish {
-                            return Err(UpstreamError::HttpError {
-                                status: 502,
-                                body: "upstream ended without finish event".into(),
-                            });
-                        }
-
-                        return Ok(UpstreamResponse::Json(
-                            serde_json::to_value(build_completion(
-                                model.as_str(),
-                                &text_parts.join(""),
-                                &reasoning_parts.join(""),
-                                &tool_calls,
-                                finish_reason,
-                                &usage,
-                            ))
-                            .map_err(|e| {
-                                UpstreamError::HttpError {
-                                    status: 502,
-                                    body: format!("response serialization: {e}"),
-                                }
-                            })?,
-                        ));
+                        let parsed = self.provider.parse_non_streaming(&text, model.as_str())?;
+                        return Ok(UpstreamResponse::Json(parsed));
                     } else {
                         let (tx, rx) = mpsc::channel(256);
                         let stream = response.bytes_stream();
@@ -343,6 +218,7 @@ impl UpstreamClient {
                         let cancel = tokio_util::sync::CancellationToken::new();
                         let cancel_inner = cancel.clone();
                         let metrics = self.metrics.clone();
+                        let provider_for_task = self.provider.clone();
 
                         tokio::spawn(async move {
                             use futures::StreamExt;
@@ -502,7 +378,7 @@ impl UpstreamClient {
                                     let _ = tx.send(Ok("data: [DONE]\n\n".to_string())).await;
                                 }
                             } else {
-                                match translate_line(&residual, &mut state) {
+                                match provider_for_task.translate_line(&residual, &mut state) {
                                     LineOutcome::Skip => {
                                         // Residual did not parse into a complete
                                         // event — this is a truncated stream. Do
@@ -573,7 +449,7 @@ fn is_retryable(status: u16) -> bool {
 /// revoked, or exhausted — refresh it (and optionally rotate accounts when
 /// auto-rotate is enabled) and retry once (handled separately from the
 /// network-retry budget). 429 covers rate-limit and credits-exhausted edges.
-fn is_auth_rejected(status: u16) -> bool {
+pub fn is_auth_rejected(status: u16) -> bool {
     matches!(status, 401 | 403 | 429)
 }
 
@@ -628,7 +504,7 @@ fn cached_structure(cwd: &str) -> Vec<String> {
 
 /// Build the config block the upstream requires (workingDir, date, ...).
 /// No subprocess calls — git state is reported as clean/non-repo.
-fn build_config(cwd: &str) -> serde_json::Value {
+pub fn build_config(cwd: &str) -> serde_json::Value {
     use std::time::SystemTime;
 
     let date = SystemTime::now()
@@ -866,7 +742,8 @@ fn chrono_now_secs() -> i64 {
         .as_secs() as i64
 }
 
-fn extract_system(messages: &[cmdcode_core::wire_format::OpenAiMessage]) -> Option<String> {
+/// Extract the leading system prompt text from OpenAI messages.
+pub fn extract_system(messages: &[cmdcode_core::wire_format::OpenAiMessage]) -> Option<String> {
     for msg in messages {
         if msg.role == "system" {
             return Some(match &msg.content {
@@ -895,7 +772,7 @@ fn extract_system(messages: &[cmdcode_core::wire_format::OpenAiMessage]) -> Opti
 /// rendered section: when no preferences exist yet, the CLI still sends the
 /// "no preferences learned yet" block, which primes the agent to record
 /// taste during the session.
-async fn read_taste_content(auth_dir: &std::path::Path, cwd: &str) -> String {
+pub async fn read_taste_content(auth_dir: &std::path::Path, cwd: &str) -> String {
     let global_path = auth_dir.join("taste").join("taste.md");
     let local_path = std::path::Path::new(cwd)
         .join(".commandcode")
@@ -1390,6 +1267,8 @@ mod tests {
             rate_limit_window_secs: 60,
             rate_limit_backend: cmdcode_core::types::RateLimitBackend::Local,
             rate_limit_redis_url: None,
+            provider: "command-code".to_string(),
+            provider_api_key: None,
         }
     }
 

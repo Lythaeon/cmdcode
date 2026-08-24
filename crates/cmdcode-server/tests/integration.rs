@@ -804,6 +804,8 @@ async fn test_benchmark_through_proxy_vs_direct() {
         rate_limit_window_secs: 60,
         rate_limit_backend: cmdcode_core::types::RateLimitBackend::Local,
         rate_limit_redis_url: None,
+        provider: "command-code".to_string(),
+        provider_api_key: None,
     };
     let auth = cmdcode_core::auth::AuthManager::new(auth_dir.clone(), 60);
 
@@ -998,6 +1000,8 @@ async fn start_proxy_impl(
         rate_limit_window_secs: 60,
         rate_limit_backend: cmdcode_core::types::RateLimitBackend::Local,
         rate_limit_redis_url: None,
+        provider: "command-code".to_string(),
+        provider_api_key: None,
     };
     let auth = cmdcode_core::auth::AuthManager::new(auth_dir, 60);
 
