@@ -40,7 +40,7 @@ pub trait Provider: Send + Sync {
     fn name(&self) -> &'static str;
 
     /// Full endpoint URL for chat completions.
-    fn endpoint(&self, base_url: &str) -> String;
+    fn endpoint(&self) -> String;
 
     /// Identity/auth headers for an upstream call.
     async fn headers(
@@ -77,13 +77,96 @@ pub trait Provider: Send + Sync {
     }
 }
 
-/// Build the configured provider adapter.
-pub fn from_config(config: &cmdcode_core::config::ProxyConfig, auth: Arc<AuthManager>) -> Box<dyn Provider> {
-    match config.provider.as_str() {
-        "openai" => Box::new(openai::OpenAiProvider {
-            api_key: config.provider_api_key.clone(),
-        }),
-        // Default and explicit fallback
-        _ => Box::new(commandcode::CommandCodeProvider { auth }),
+/// Routes each request to the provider that declares its model.
+///
+/// Built from the opencode-style `providers.json` when present; otherwise a
+/// single adapter synthesized from environment variables (back-compat).
+pub struct ProviderRouter {
+    /// Provider used when no model mapping matches (first declared entry).
+    pub default: Arc<dyn Provider>,
+    /// Model id -> provider that serves it.
+    pub by_model: std::collections::HashMap<String, Arc<dyn Provider>>,
+    /// Aggregated model list across all providers (`/v1/models`).
+    pub models: Vec<serde_json::Value>,
+}
+
+impl ProviderRouter {
+    /// Resolve the provider serving `model`, falling back to the default.
+    pub fn resolve(&self, model: &str) -> &Arc<dyn Provider> {
+        self.by_model
+            .get(model)
+            .unwrap_or(&self.default)
+    }
+
+    /// Build the router from the declarative config, falling back to the
+    /// env-var single-provider setup when no file exists.
+    pub fn from_env(config: &cmdcode_core::config::ProxyConfig, auth: Arc<AuthManager>) -> Self {
+        let loaded = cmdcode_core::provider_config::ProvidersConfig::load()
+            .ok()
+            .flatten();
+
+        let Some(cfg) = loaded else {
+            // Back-compat: single provider from COMMAND_CODE_* env vars.
+            let default: Arc<dyn Provider> = match config.provider.as_str() {
+                "openai" => Arc::new(openai::OpenAiProvider {
+                    base_url: config.upstream_url.clone(),
+                    api_key: config.provider_api_key.clone(),
+                }),
+                _ => Arc::new(commandcode::CommandCodeProvider {
+                    auth,
+                    base_url: config.upstream_url.clone(),
+                    learning: true,
+                }),
+            };
+            return Self {
+                default,
+                by_model: std::collections::HashMap::new(),
+                models: Vec::new(),
+            };
+        };
+
+        let mut by_model = std::collections::HashMap::new();
+        let mut models = Vec::new();
+        let mut default: Option<Arc<dyn Provider>> = None;
+
+        for (key, entry) in cfg.entries() {
+            let provider: Arc<dyn Provider> = match entry.kind() {
+                cmdcode_core::provider_config::AdapterKind::OpenAi => Arc::new(openai::OpenAiProvider {
+                    base_url: entry.base_url().unwrap_or_else(|| "http://localhost".into()),
+                    api_key: entry.api_key(),
+                }),
+                cmdcode_core::provider_config::AdapterKind::CommandCode => Arc::new(
+                    commandcode::CommandCodeProvider {
+                        auth: auth.clone(),
+                        base_url: entry
+                            .base_url()
+                            .unwrap_or_else(|| config.upstream_url.clone()),
+                        learning: entry.learning,
+                    },
+                ),
+            };
+            if default.is_none() {
+                default = Some(provider.clone());
+            }
+            let display_name =
+                entry.name.clone().unwrap_or_else(|| key.to_string());
+            for id in entry.models.keys() {
+                by_model.insert(id.clone(), provider.clone());
+                models.push(serde_json::json!({
+                    "id": id,
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": display_name,
+                }));
+            }
+        }
+
+        let default = default.expect("providers map was non-empty");
+        Self {
+            default,
+            by_model,
+            models,
+        }
     }
 }
+

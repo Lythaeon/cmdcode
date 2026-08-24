@@ -12,6 +12,10 @@ use std::sync::Arc;
 pub struct CommandCodeProvider {
     /// Credential manager (vault + auth.json) with account rotation.
     pub auth: Arc<AuthManager>,
+    /// Upstream base URL (e.g. `https://api.commandcode.ai`).
+    pub base_url: String,
+    /// Whether this entry serves taste learning requests.
+    pub learning: bool,
 }
 
 #[async_trait::async_trait]
@@ -20,8 +24,8 @@ impl Provider for CommandCodeProvider {
         "command-code"
     }
 
-    fn endpoint(&self, base_url: &str) -> String {
-        format!("{base_url}/alpha/generate")
+    fn endpoint(&self) -> String {
+        format!("{}/alpha/generate", self.base_url.trim_end_matches('/'))
     }
 
     async fn headers(

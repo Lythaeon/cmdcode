@@ -17,6 +17,8 @@ use crate::upstream::{LineOutcome, StreamState};
 /// OpenAI-compatible pass-through provider.
 #[derive(Clone)]
 pub struct OpenAiProvider {
+    /// Upstream base URL (e.g. `https://api.openai.com/v1`).
+    pub base_url: String,
     /// Bearer token for upstream auth.
     pub api_key: Option<String>,
 }
@@ -56,8 +58,8 @@ impl Provider for OpenAiProvider {
         "openai"
     }
 
-    fn endpoint(&self, base_url: &str) -> String {
-        format!("{}/chat/completions", base_url.trim_end_matches('/'))
+    fn endpoint(&self) -> String {
+        format!("{}/chat/completions", self.base_url.trim_end_matches('/'))
     }
 
     async fn headers(

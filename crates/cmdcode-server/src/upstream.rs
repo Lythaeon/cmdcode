@@ -34,8 +34,8 @@ pub struct UpstreamClient {
     pub metrics: Arc<Metrics>,
     /// Concurrency limiter (None = unlimited).
     pub semaphore: Option<Arc<Semaphore>>,
-    /// Active upstream provider adapter.
-    pub provider: Arc<dyn crate::providers::Provider>,
+    /// Provider router — resolves which upstream serves each model.
+    pub router: crate::providers::ProviderRouter,
 }
 
 impl UpstreamClient {
@@ -57,7 +57,7 @@ impl UpstreamClient {
             Some(Arc::new(Semaphore::new(config.max_concurrent)))
         };
 
-        let provider = Arc::from(crate::providers::from_config(&config, auth.clone()));
+        let router = crate::providers::ProviderRouter::from_env(&config, auth.clone());
 
         Self {
             http,
@@ -65,7 +65,7 @@ impl UpstreamClient {
             auth,
             metrics,
             semaphore,
-            provider,
+            router,
         }
     }
 
@@ -102,12 +102,12 @@ impl UpstreamClient {
             None
         };
 
-        let mut headers = self
-            .provider
-            .headers(&self.auth, &cwd)
-            .await?;
+        // Route to the provider that declares this model (default fallback).
+        let provider = self.router.resolve(model.as_str()).clone();
 
-        let upstream_body = self.provider.build_body(&crate::providers::RequestContext {
+        let mut headers = provider.headers(&self.auth, &cwd).await?;
+
+        let upstream_body = provider.build_body(&crate::providers::RequestContext {
             model,
             body,
             effort,
@@ -115,7 +115,7 @@ impl UpstreamClient {
             taste_section,
         });
 
-        let url = self.provider.endpoint(&self.config.upstream_url);
+        let url = provider.endpoint();
 
         let mut last_err: Option<UpstreamError> = None;
         let max_attempts = 1 + self.config.max_retries;
@@ -141,11 +141,10 @@ impl UpstreamClient {
                                         status,
                                         body: err.to_string(),
                                     };
-                                    if self.provider.is_auth_rejected(status)
+                                    if provider.is_auth_rejected(status)
                                         && !auth_retried
                                     {
-                                        if let Some(name) = self
-                                            .provider
+                                        if let Some(name) = provider
                                             .on_auth_rejected(&self.auth)
                                             .await
                                         {
@@ -158,7 +157,7 @@ impl UpstreamClient {
                                             self.auth.invalidate_cache().await;
                                         }
                                         headers =
-                                            self.provider.headers(&self.auth, &cwd).await?;
+                                            provider.headers(&self.auth, &cwd).await?;
                                         auth_retried = true;
                                         continue; // refresh once, not against the retry budget
                                     }
@@ -179,8 +178,8 @@ impl UpstreamClient {
                             status,
                             body: body_text,
                         };
-                        if self.provider.is_auth_rejected(status) && !auth_retried {
-                            if let Some(name) = self.provider.on_auth_rejected(&self.auth).await {
+                        if provider.is_auth_rejected(status) && !auth_retried {
+                            if let Some(name) = provider.on_auth_rejected(&self.auth).await {
                                 tracing::warn!(
                                     account = %name,
                                     status = status,
@@ -189,7 +188,7 @@ impl UpstreamClient {
                             } else {
                                 self.auth.invalidate_cache().await;
                             }
-                            headers = self.provider.headers(&self.auth, &cwd).await?;
+                            headers = provider.headers(&self.auth, &cwd).await?;
                             auth_retried = true;
                             continue; // refresh once, not against the retry budget
                         }
@@ -209,7 +208,7 @@ impl UpstreamClient {
                             .text()
                             .await
                             .map_err(|e| UpstreamError::Io(std::io::Error::other(e.to_string())))?;
-                        let parsed = self.provider.parse_non_streaming(&text, model.as_str())?;
+                        let parsed = provider.parse_non_streaming(&text, model.as_str())?;
                         return Ok(UpstreamResponse::Json(parsed));
                     } else {
                         let (tx, rx) = mpsc::channel(256);
@@ -218,7 +217,7 @@ impl UpstreamClient {
                         let cancel = tokio_util::sync::CancellationToken::new();
                         let cancel_inner = cancel.clone();
                         let metrics = self.metrics.clone();
-                        let provider_for_task = self.provider.clone();
+                        let provider_for_task = provider.clone();
 
                         tokio::spawn(async move {
                             use futures::StreamExt;

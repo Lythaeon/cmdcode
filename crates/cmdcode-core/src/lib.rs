@@ -11,6 +11,9 @@ pub mod config;
 pub mod error;
 /// Model catalog parsed from CLI-bundled model metadata.
 pub mod model_catalog;
+
+/// Declarative upstream-provider configuration (opencode-style providers map).
+pub mod provider_config;
 /// Rate limiting for API requests.
 pub mod rate_limiter;
 /// Harness detection and configuration.

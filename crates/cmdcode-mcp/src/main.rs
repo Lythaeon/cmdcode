@@ -80,6 +80,126 @@ fn taste_tool_schema() -> Value {
     })
 }
 
+
+/// Where taste-learning requests are sent, derived from the opencode-style
+/// providers config (`~/.cmdcode/providers.json`).
+#[derive(Debug, Clone)]
+enum LearningTarget {
+    /// command-code adapter — free `/alpha/generate` endpoint.
+    CommandCode { url: String, model: String },
+    /// Any OpenAI-compatible provider.
+    OpenAi {
+        url: String,
+        api_key: Option<String>,
+        model: String,
+    },
+}
+
+fn resolve_learning_target() -> LearningTarget {
+    use cmdcode_core::provider_config::{AdapterKind, ProvidersConfig};
+
+    let loaded = ProvidersConfig::load().ok().flatten();
+
+    if let Some(cfg) = loaded {
+        // Explicit learning flag wins, then a command-code entry, then any.
+        let pick = |pred: &dyn Fn(&cmdcode_core::provider_config::ProviderEntry) -> bool| {
+            cfg.entries()
+                .find(|(_, e)| pred(e))
+                .map(|(_, e)| e)
+        };
+        let chosen = pick(&|e| e.learning)
+            .or_else(|| pick(&|e| e.kind() == AdapterKind::CommandCode))
+            .or_else(|| pick(&|_| true));
+
+        if let Some(entry) = chosen {
+            let model = entry
+                .models
+                .keys()
+                .next()
+                .cloned()
+                .unwrap_or_else(upstream_model);
+            return match entry.kind() {
+                AdapterKind::CommandCode => LearningTarget::CommandCode {
+                    url: format!(
+                        "{}/alpha/generate",
+                        entry.base_url().unwrap_or_else(upstream_url).trim_end_matches('/')
+                    ),
+                    model,
+                },
+                AdapterKind::OpenAi => LearningTarget::OpenAi {
+                    url: format!(
+                        "{}/chat/completions",
+                        entry.base_url().unwrap_or_else(upstream_url).trim_end_matches('/')
+                    ),
+                    api_key: entry.api_key(),
+                    model,
+                },
+            };
+        }
+    }
+
+    // No config: default to command-code free endpoint from env.
+    LearningTarget::CommandCode {
+        url: format!("{}/alpha/generate", upstream_url()),
+        model: upstream_model(),
+    }
+}
+
+const TASTE_SYSTEM_PROMPT: &str = "You are a taste learning assistant. When the user states a coding preference, record it using the write_taste_file tool. Only record genuinely stated preferences, don't invent them.";
+
+fn taste_tool_schema_cc() -> Value {
+    json!({
+        "name": "write_taste_file",
+        "description": "Write a taste category file. Use this to record preferences.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path like 'style.md' or 'tools.md'"},
+                "content": {"type": "string", "description": "The content to write."}
+            },
+            "required": ["path", "content"]
+        }
+    })
+}
+
+/// Execute completed `write_taste_file` calls collected as (name, args-json).
+fn execute_taste_calls(
+    pending: Vec<(String, String)>,
+    text_out: &str,
+) -> Result<String, String> {
+    let mut results = Vec::new();
+    for (tool_name, input_str) in pending {
+        if tool_name != "write_taste_file" {
+            continue;
+        }
+        let Ok(input) = serde_json::from_str::<Value>(input_str.trim()) else {
+            continue;
+        };
+        if let (Some(path), Some(content)) = (
+            input.get("path").and_then(|p| p.as_str()),
+            input.get("content").and_then(|c| c.as_str()),
+        ) {
+            if let Some(p) = resolve_taste_path(path) {
+                std::fs::create_dir_all(p.parent().unwrap_or(Path::new(".")))
+                    .map_err(|e| format!("mkdir failed: {e}"))?;
+                std::fs::write(&p, content).map_err(|e| format!("write failed: {e}"))?;
+                results.push(format!("Recorded preferences in {}", p.display()));
+            }
+        }
+    }
+
+    if results.is_empty() {
+        let note = text_out.trim();
+        if note.is_empty() {
+            Ok("No new taste recorded.".into())
+        } else {
+            Ok(format!("No new taste recorded. Model said: {note}"))
+        }
+    } else {
+        Ok(results.join(", "))
+    }
+}
+
 async fn handle_taste_call(instruction: &str) -> Result<String, String> {
     if instruction.trim().is_empty() {
         return Err("An instruction is required.".into());
@@ -107,153 +227,196 @@ async fn handle_taste_call(instruction: &str) -> Result<String, String> {
         )
     };
 
-    let body = json!({
-        "config": {
-            "workingDir": std::env::current_dir()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| ".".to_string()),
-            "date": chrono_date(),
-            "environment": std::env::consts::OS,
-            "structure": [],
-            "isGitRepo": false,
-            "currentBranch": "",
-            "mainBranch": "",
-            "gitStatus": "",
-            "recentCommits": []
-        },
-        "memory": null,
-        "taste": null,
-        "skills": null,
-        // Captured from the official CLI's learn pipeline: permissionMode is
-        // "standard" and there is NO mode field on this wire format.
-        "permissionMode": "standard",
-        "threadId": uuid_v4(),
-        "params": {
-            "model": upstream_model(),
-            "messages": [{"role": "user", "content": [{"type": "text", "text": user_msg}]}],
-            "tools": [json!({
-                "name": "write_taste_file",
-                "description": "Write a taste category file. Use this to record preferences.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "Path like 'style.md' or 'tools.md'"},
-                        "content": {"type": "string", "description": "The content to write."}
-                    },
-                    "required": ["path", "content"]
+    match resolve_learning_target() {
+        LearningTarget::CommandCode { url, model } => {
+            // CLI's free taste endpoint; wire format must match exactly or
+            // upstream rejects with "Proxy use detected".
+            let body = json!({
+                "config": {
+                    "workingDir": std::env::current_dir()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|_| ".".to_string()),
+                    "date": chrono_date(),
+                    "environment": std::env::consts::OS,
+                    "structure": [],
+                    "isGitRepo": false,
+                    "currentBranch": "",
+                    "mainBranch": "",
+                    "gitStatus": "",
+                    "recentCommits": []
+                },
+                "memory": null,
+                "taste": null,
+                "skills": null,
+                // Captured from the official CLI's learn pipeline:
+                // permissionMode is "standard" and there is NO mode field.
+                "permissionMode": "standard",
+                "threadId": uuid_v4(),
+                "params": {
+                    "model": model,
+                    "messages": [{"role": "user", "content": [{"type": "text", "text": user_msg}]}],
+                    "tools": [taste_tool_schema_cc()],
+                    "system": TASTE_SYSTEM_PROMPT,
+                    "max_tokens": 4096,
+                    "stream": true
                 }
-            })],
-            "system": "You are a taste learning assistant. When the user states a coding preference, record it using the write_taste_file tool. Only record genuinely stated preferences, don't invent them.",
-            "max_tokens": 4096,
-            "stream": true
-        }
-    });
+            });
 
-    // Call the CLI's free taste endpoint directly (same wire format as
-    // command-code's postStream — body must match or upstream rejects with
-    // "Proxy use detected").
-    let url = format!("{}/alpha/generate", upstream_url());
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(300))
-        .build()
-        .map_err(|e| format!("HTTP client error: {e}"))?;
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(300))
+                .build()
+                .map_err(|e| format!("HTTP client error: {e}"))?;
 
-    let headers = build_auth_headers().await;
-    let resp = client
-        .post(&url)
-        .headers(headers)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("upstream request failed: {e}"))?;
+            let headers = build_auth_headers().await;
+            let resp = client
+                .post(&url)
+                .headers(headers)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("upstream request failed: {e}"))?;
 
-    let status = resp.status();
-    if !status.is_success() {
-        let body_text = resp.text().await.unwrap_or_default();
-        return Err(format!("upstream error {status}: {body_text}"));
-    }
-
-    // Consume the NDJSON stream, assembling tool calls from deltas.
-    let mut stream = resp.bytes_stream();
-
-    // toolCallId -> (toolName, accumulated input JSON string)
-    let mut pending: std::collections::HashMap<String, (String, String)> =
-        std::collections::HashMap::new();
-    let mut text_out = String::new();
-    let mut buf: Vec<u8> = Vec::new();
-
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| format!("stream read failed: {e}"))?;
-        buf.extend_from_slice(&chunk);
-        while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
-            let line: Vec<u8> = buf.drain(..=pos).collect();
-            let line = String::from_utf8_lossy(&line);
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
+            let status = resp.status();
+            if !status.is_success() {
+                let body_text = resp.text().await.unwrap_or_default();
+                return Err(format!("upstream error {status}: {body_text}"));
             }
-            let Ok(ev) = serde_json::from_str::<Value>(line) else {
-                continue;
-            };
-            match ev.get("type").and_then(|t| t.as_str()).unwrap_or("") {
-                "tool-input-start" => {
-                    let id = ev.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
-                    let name = ev
-                        .get("toolName")
+
+            // Consume the NDJSON stream, assembling tool calls from deltas.
+            let mut pending: std::collections::HashMap<String, (String, String)> =
+                std::collections::HashMap::new();
+            let mut text_out = String::new();
+            let mut buf: Vec<u8> = Vec::new();
+
+            let mut stream = resp.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|e| format!("stream read failed: {e}"))?;
+                buf.extend_from_slice(&chunk);
+                while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+                    let line: Vec<u8> = buf.drain(..=pos).collect();
+                    let line = String::from_utf8_lossy(&line);
+                    let line = line.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    let Ok(ev) = serde_json::from_str::<Value>(line) else {
+                        continue;
+                    };
+                    match ev.get("type").and_then(|t| t.as_str()).unwrap_or("") {
+                        "tool-input-start" => {
+                            let id =
+                                ev.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
+                            let name = ev
+                                .get("toolName")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            pending.insert(id, (name, String::new()));
+                        }
+                        "tool-input-delta" => {
+                            let id = ev.get("id").and_then(|i| i.as_str()).unwrap_or("");
+                            if let Some((_, acc)) = pending.get_mut(id) {
+                                acc.push_str(
+                                    ev.get("delta").and_then(|d| d.as_str()).unwrap_or(""),
+                                );
+                            }
+                        }
+                        "text-delta" => {
+                            text_out
+                                .push_str(ev.get("delta").and_then(|d| d.as_str()).unwrap_or(""));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            let collected: Vec<(String, String)> =
+                pending.into_values().collect();
+            execute_taste_calls(collected, &text_out)
+        }
+        LearningTarget::OpenAi { url, api_key, model } => {
+            // Generic OpenAI-compatible path: one-shot completion, tool calls
+            // parsed from the response message.
+            let body = json!({
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": TASTE_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_msg}
+                ],
+                "tools": [{
+                    "type": "function",
+                    "function": {
+                        "name": "write_taste_file",
+                        "description": "Write a taste category file. Use this to record preferences.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "content": {"type": "string"}
+                            },
+                            "required": ["path", "content"]
+                        }
+                    }
+                }],
+                "max_tokens": 4096,
+                "stream": false
+            });
+
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(300))
+                .build()
+                .map_err(|e| format!("HTTP client error: {e}"))?;
+
+            let mut req = client.post(&url).header("Content-Type", "application/json");
+            if let Some(key) = api_key {
+                req = req.bearer_auth(key);
+            }
+            let resp = req
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("upstream request failed: {e}"))?;
+
+            let status = resp.status();
+            if !status.is_success() {
+                let body_text = resp.text().await.unwrap_or_default();
+                return Err(format!("upstream error {status}: {body_text}"));
+            }
+
+            let response: Value = resp
+                .json()
+                .await
+                .map_err(|e| format!("invalid upstream response: {e}"))?;
+
+            let msg = response
+                .pointer("/choices/0/message")
+                .cloned()
+                .unwrap_or(json!({}));
+
+            let mut collected = Vec::new();
+            if let Some(calls) = msg.get("tool_calls").and_then(|t| t.as_array()) {
+                for tc in calls {
+                    let name = tc
+                        .pointer("/function/name")
                         .and_then(|n| n.as_str())
                         .unwrap_or("")
                         .to_string();
-                    pending.insert(id, (name, String::new()));
+                    let args = tc
+                        .pointer("/function/arguments")
+                        .and_then(|a| a.as_str())
+                        .unwrap_or("{}")
+                        .to_string();
+                    collected.push((name, args));
                 }
-                "tool-input-delta" => {
-                    let id = ev.get("id").and_then(|i| i.as_str()).unwrap_or("");
-                    if let Some((_, acc)) = pending.get_mut(id) {
-                        acc.push_str(ev.get("delta").and_then(|d| d.as_str()).unwrap_or(""));
-                    }
-                }
-                "text-delta" => {
-                    text_out.push_str(ev.get("delta").and_then(|d| d.as_str()).unwrap_or(""));
-                }
-                _ => {}
             }
-        }
-    }
+            let text_out = msg
+                .get("content")
+                .and_then(|c| c.as_str())
+                .unwrap_or("")
+                .to_string();
 
-    drop(stream);
-
-    // Execute completed write_taste_file calls.
-    let mut results = Vec::new();
-    for (_, (tool_name, input_str)) in &pending {
-        if tool_name != "write_taste_file" {
-            continue;
+            execute_taste_calls(collected, &text_out)
         }
-        let input: Value = match serde_json::from_str(input_str.trim()) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        if let (Some(path), Some(content)) = (
-            input.get("path").and_then(|p| p.as_str()),
-            input.get("content").and_then(|c| c.as_str()),
-        ) {
-            let taste_path = resolve_taste_path(path);
-            if let Some(p) = taste_path {
-                std::fs::create_dir_all(p.parent().unwrap_or(Path::new(".")))
-                    .map_err(|e| format!("mkdir failed: {e}"))?;
-                std::fs::write(&p, content).map_err(|e| format!("write failed: {e}"))?;
-                results.push(format!("Recorded preferences in {}", p.display()));
-            }
-        }
-    }
-
-    if results.is_empty() {
-        let note = text_out.trim();
-        if note.is_empty() {
-            Ok("No new taste recorded.".into())
-        } else {
-            Ok(format!("No new taste recorded. Model said: {note}"))
-        }
-    } else {
-        Ok(format!("Recorded: {}", results.join(", ")))
     }
 }
 

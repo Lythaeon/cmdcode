@@ -579,11 +579,22 @@ impl CommandCodeProxy {
     }
 
     async fn handle_models(&self, session: &mut Session) -> PingoraResult<()> {
+        let mut seen = std::collections::HashSet::new();
+        let mut models: Vec<serde_json::Value> = Vec::new();
+
+        // Declared provider models first (opencode-style providers map).
+        for m in &self.upstream_client.router.models {
+            if let Some(id) = m.get("id").and_then(|v| v.as_str()) {
+                seen.insert(id.to_string());
+            }
+            models.push(m.clone());
+        }
+
+        // Bundled catalog entries not shadowed by a provider declaration.
         let catalog = get_model_catalog();
-        let models: Vec<serde_json::Value> = catalog
-            .iter()
-            .map(|(id, meta)| {
-                serde_json::json!({
+        for (id, meta) in catalog {
+            if seen.insert(id.as_ref().to_string()) {
+                models.push(serde_json::json!({
                     "id": id.as_ref(),
                     "object": "model",
                     "created": 0,
@@ -592,9 +603,9 @@ impl CommandCodeProxy {
                     "reasoning": meta.reasoning,
                     "efforts": meta.efforts.iter().map(|e| e.as_str()).collect::<Vec<_>>(),
                     "context_window": meta.context_window.as_u64(),
-                })
-            })
-            .collect();
+                }));
+            }
+        }
 
         let response = serde_json::json!({
             "object": "list",
