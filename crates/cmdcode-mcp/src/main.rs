@@ -124,12 +124,10 @@ async fn handle_taste_call(instruction: &str) -> Result<String, String> {
         "memory": null,
         "taste": null,
         "skills": null,
-        "permissionMode": "default",
+        // Captured from the official CLI's learn pipeline: permissionMode is
+        // "standard" and there is NO mode field on this wire format.
+        "permissionMode": "standard",
         "threadId": uuid_v4(),
-        // The CLI stamps feature purpose into `mode` via withUsageContext —
-        // "learning" is what attributes the call as taste usage on the
-        // dashboard. "agent" would lump it into regular chat usage.
-        "mode": "learning",
         "params": {
             "model": upstream_model(),
             "messages": [{"role": "user", "content": [{"type": "text", "text": user_msg}]}],
@@ -346,16 +344,19 @@ async fn build_auth_headers() -> reqwest::header::HeaderMap {
             .parse()
             .unwrap(),
     );
-    headers.insert(
-        "x-project-slug",
-        std::env::current_dir()
-            .ok()
-            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-            .unwrap_or_else(|| "unknown".into())
-            .parse()
-            .unwrap(),
-    );
+    // CLI slugifies the cwd path (e.g. home-ac-projects-cmdcode)
+    let slug = std::env::current_dir()
+        .map(|p| {
+            p.display()
+                .to_string()
+                .trim_start_matches('/')
+                .replace(['/', '_'], "-")
+                .to_lowercase()
+        })
+        .unwrap_or_else(|_| "unknown".into());
+    headers.insert("x-project-slug", slug.parse().unwrap());
     headers.insert("x-session-id", uuid_v4().parse().unwrap());
+    headers.insert("x-taste-learning", "true".parse().unwrap());
     headers
 }
 
