@@ -2,11 +2,170 @@
 //! `~/.cmdcode/providers.json` (opencode-style providers map).
 
 use cmdcode_core::provider_config::ProvidersConfig;
+use inquire::{Confirm, Select};
 use std::path::PathBuf;
 
 /// Config path used by all connect operations.
 fn config_path() -> Result<PathBuf, String> {
     ProvidersConfig::default_path().ok_or_else(|| "cannot determine home directory".into())
+}
+
+/// Interactive TUI: `cmdcode connect` (no subcommand). Mirrors `auth`'s
+/// loop-with-menu structure.
+pub fn tui() {
+    loop {
+        let cfg = match load_raw() {
+            Ok(v) => v,
+            Err(e) => fail(&format!("failed to read providers config: {e}")),
+        };
+        let empty = cfg
+            .get("providers")
+            .and_then(|p| p.as_object())
+            .map(|p| p.is_empty())
+            .unwrap_or(true);
+
+        println!();
+        if empty {
+            println!("no providers configured");
+            match Confirm::new("Add an upstream provider now?")
+                .with_default(true)
+                .prompt()
+            {
+                Ok(true) => add(),
+                _ => return,
+            }
+            continue;
+        }
+
+        // Provider table.
+        let providers = cfg
+            .get("providers")
+            .and_then(|p| p.as_object())
+            .expect("checked non-empty");
+        println!(
+            "Providers ({}):",
+            providers.len()
+        );
+        for (key, entry) in providers {
+            let kind = entry.get("type").and_then(|t| t.as_str()).unwrap_or("openai");
+            let enabled = entry
+                .get("enabled")
+                .and_then(|e| e.as_bool())
+                .unwrap_or(true);
+            let model_count = entry
+                .get("models")
+                .and_then(|m| m.as_object())
+                .map(|m| m.len())
+                .unwrap_or(0);
+            let marker = if enabled { "*" } else { " " };
+            let suffix = if enabled { "" } else { "  (disabled)" };
+            println!(
+                " {marker} {} [{}] {} model(s){suffix}",
+                key, kind, model_count
+            );
+        }
+        println!();
+
+        enum Menu {
+            Toggle,
+            Add,
+            Remove,
+            Test,
+            Quit,
+        }
+
+        let items = [
+            ("Enable/disable a provider".to_string(), Menu::Toggle),
+            ("Add a new provider".to_string(), Menu::Add),
+            ("Remove a provider".to_string(), Menu::Remove),
+            ("Test connectivity".to_string(), Menu::Test),
+            ("Done".to_string(), Menu::Quit),
+        ];
+
+        let labels: Vec<String> = items.iter().map(|(l, _)| l.clone()).collect();
+        let selection =
+            Select::new("Select an action", labels)
+                .with_help_message("↑/↓ to move · Enter to select · Esc to exit")
+                .prompt();
+
+        let Ok(chosen_label) = selection else { return };
+        let Some((_, action)) = items.iter().find(|(l, _)| l == &chosen_label) else {
+            return;
+        };
+        match action {
+            Menu::Toggle => toggle_tui(),
+            Menu::Add => add(),
+            Menu::Remove => match pick_provider("Provider to remove") {
+                Some(name) => remove(&name),
+                None => continue,
+            },
+            Menu::Test => match pick_provider("Provider to test") {
+                Some(name) => test(&name),
+                None => continue,
+            },
+            Menu::Quit => return,
+        }
+    }
+}
+
+fn fail(msg: &str) -> ! {
+    eprintln!("error: {msg}");
+    std::process::exit(1);
+}
+
+/// Pick one configured provider id; None on cancel/empty.
+fn pick_provider(title: &str) -> Option<String> {
+    let cfg = load_raw().ok()?;
+    let keys: Vec<String> = cfg
+        .get("providers")
+        .and_then(|p| p.as_object())
+        .map(|p| p.keys().cloned().collect())
+        .unwrap_or_default();
+    if keys.is_empty() {
+        println!("no providers configured");
+        return None;
+    }
+    Select::new(title, keys)
+        .with_help_message("↑/↓ to move · Enter to select · Esc to cancel")
+        .prompt()
+        .ok()
+}
+
+/// Toggle flow: pick provider, then choose enable or disable.
+fn toggle_tui() {
+    let Some(name) = pick_provider("Provider to toggle") else { return };
+
+    // Current state determines the default choice ordering.
+    let currently_enabled = load_raw().ok().and_then(|cfg| {
+        cfg.pointer(&format!("/providers/{name}/enabled"))
+            .and_then(|v| v.as_bool())
+    });
+    let is_enabled = currently_enabled.unwrap_or(true);
+
+    enum Action {
+        Enable,
+        Disable,
+        Cancel,
+    }
+    let actions: Vec<(&str, Action)> = if is_enabled {
+        vec![
+            ("Disable", Action::Disable),
+            ("Keep enabled", Action::Cancel),
+        ]
+    } else {
+        vec![
+            ("Enable", Action::Enable),
+            ("Keep disabled", Action::Cancel),
+        ]
+    };
+    let title = format!("{name}: currently {}", if is_enabled { "ENABLED" } else { "disabled" });
+    let Ok(choice) = Select::new(&title, actions.iter().map(|(l, _)| l.to_string()).collect())
+        .prompt() else { return };
+    match actions.iter().find(|(l, _)| l == &choice).map(|(_, a)| a) {
+        Some(Action::Enable) => enable(&name),
+        Some(Action::Disable) => disable(&name),
+        _ => {}
+    }
 }
 
 /// Load the raw JSON config (creating an empty one if missing).

@@ -42,7 +42,7 @@ fn main() {
         },
         Commands::Test => commands::test::run(),
         Commands::Connect { command } => match command {
-            None => commands::connect::list(),
+            None => commands::connect::tui(),
             Some(ConnectCommand::List) => commands::connect::list(),
             Some(ConnectCommand::Add) => commands::connect::add(),
             Some(ConnectCommand::Remove { name }) => commands::connect::remove(&name),
