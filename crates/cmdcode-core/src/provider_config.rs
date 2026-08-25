@@ -144,9 +144,7 @@ impl ProvidersConfig {
         let content = match std::fs::read_to_string(&path) {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => {
-                return Err(format!("read {}: {e}", path.display()))
-            }
+            Err(e) => return Err(format!("read {}: {e}", path.display())),
         };
         // Tolerate an empty file.
         if content.trim().is_empty() {
@@ -219,10 +217,7 @@ mod tests {
 
         let cc = &cfg.providers["command-code"];
         assert_eq!(cc.kind(), AdapterKind::CommandCode);
-        assert_eq!(
-            cc.base_url().as_deref(),
-            Some("https://api.commandcode.ai")
-        );
+        assert_eq!(cc.base_url().as_deref(), Some("https://api.commandcode.ai"));
         assert!(cc.models.contains_key("xiaomi/mimo-v2.5"));
 
         let oa = &cfg.providers["openai"];
@@ -241,10 +236,7 @@ mod tests {
             interpolate_env("prefix-{env:PROVIDER_CFG_TEST_KEY}-suffix"),
             "prefix-sk-test-123-suffix"
         );
-        assert_eq!(
-            interpolate_env("{env:PROVIDER_CFG_TEST_UNSET_VAR_XYZ}"),
-            ""
-        );
+        assert_eq!(interpolate_env("{env:PROVIDER_CFG_TEST_UNSET_VAR_XYZ}"), "");
         assert_eq!(interpolate_env("plain"), "plain");
         std::env::remove_var("PROVIDER_CFG_TEST_KEY");
     }
@@ -253,8 +245,7 @@ mod tests {
     fn test_adapter_kind_defaults() {
         let entry: ProviderEntry = serde_json::from_str(r#"{"options":{}}"#).unwrap();
         assert_eq!(entry.kind(), AdapterKind::OpenAi);
-        let entry: ProviderEntry =
-            serde_json::from_str(r#"{"type":"command-code"}"#).unwrap();
+        let entry: ProviderEntry = serde_json::from_str(r#"{"type":"command-code"}"#).unwrap();
         assert_eq!(entry.kind(), AdapterKind::CommandCode);
         let entry: ProviderEntry = serde_json::from_str(r#"{"type":"anthropic"}"#).unwrap();
         assert_eq!(entry.kind(), AdapterKind::Anthropic);

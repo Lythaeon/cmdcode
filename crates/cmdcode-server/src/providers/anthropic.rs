@@ -100,10 +100,17 @@ fn convert_messages(messages: &[OpenAiMessage]) -> (String, Vec<Value>) {
                 });
                 match out.last_mut() {
                     // Extend a preceding tool-result user turn.
-                    Some(last) if last["role"] == "user"
-                        && last["content"].as_array()
-                            .map(|a| a.first().and_then(|b| b.get("type")).and_then(|t| t.as_str()) == Some("tool_result"))
-                            .unwrap_or(false) =>
+                    Some(last)
+                        if last["role"] == "user"
+                            && last["content"]
+                                .as_array()
+                                .map(|a| {
+                                    a.first()
+                                        .and_then(|b| b.get("type"))
+                                        .and_then(|t| t.as_str())
+                                        == Some("tool_result")
+                                })
+                                .unwrap_or(false) =>
                     {
                         if let Some(arr) = last["content"].as_array_mut() {
                             arr.push(block);
@@ -169,9 +176,7 @@ impl AnthropicProvider {
     }
 }
 
-fn convert_tools(
-    tools: Option<&Vec<cmdcode_core::wire_format::OpenAiTool>>,
-) -> Option<Value> {
+fn convert_tools(tools: Option<&Vec<cmdcode_core::wire_format::OpenAiTool>>) -> Option<Value> {
     let tools = tools?;
     let decls: Vec<Value> = tools
         .iter()
@@ -306,10 +311,7 @@ impl Provider for AnthropicProvider {
     ) -> Result<Vec<(String, String)>, UpstreamError> {
         Ok(vec![
             ("Content-Type".into(), "application/json".into()),
-            (
-                "x-api-key".into(),
-                self.api_key.clone().unwrap_or_default(),
-            ),
+            ("x-api-key".into(), self.api_key.clone().unwrap_or_default()),
             ("anthropic-version".into(), ANTHROPIC_VERSION.into()),
         ])
     }
@@ -318,19 +320,11 @@ impl Provider for AnthropicProvider {
         self.make_body(ctx)
     }
 
-    fn translate_line<'a>(
-        &self,
-        line: &str,
-        state: &mut StreamState<'a>,
-    ) -> LineOutcome {
+    fn translate_line<'a>(&self, line: &str, state: &mut StreamState<'a>) -> LineOutcome {
         anthropic_translate_line(line, state)
     }
 
-    fn parse_non_streaming(
-        &self,
-        text: &str,
-        model: &str,
-    ) -> Result<Value, UpstreamError> {
+    fn parse_non_streaming(&self, text: &str, model: &str) -> Result<Value, UpstreamError> {
         let parsed: Value = serde_json::from_str(text).map_err(|e| UpstreamError::HttpError {
             status: 502,
             body: format!("invalid anthropic response: {e}"),
@@ -353,10 +347,7 @@ impl Provider for AnthropicProvider {
 ///
 /// Only `data:` lines carry JSON; `event:` lines are skipped (the type field
 /// inside the data payload is authoritative).
-pub fn anthropic_translate_line<'a>(
-    line: &str,
-    state: &mut StreamState<'a>,
-) -> LineOutcome {
+pub fn anthropic_translate_line<'a>(line: &str, state: &mut StreamState<'a>) -> LineOutcome {
     let trimmed = line.trim();
     if trimmed.is_empty() || !trimmed.starts_with("data:") {
         return LineOutcome::Skip;
@@ -372,7 +363,10 @@ pub fn anthropic_translate_line<'a>(
     match ev.get("type").and_then(|t| t.as_str()).unwrap_or("") {
         "content_block_start" => {
             let index = ev.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
-            let block = ev.get("content_block").cloned().unwrap_or_else(|| json!({}));
+            let block = ev
+                .get("content_block")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
             if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
                 let frame = json!({
                     "id": state.completion_id,
@@ -421,7 +415,10 @@ pub fn anthropic_translate_line<'a>(
                     })
                 }
                 Some("input_json_delta") => {
-                    let partial = delta.get("partial_json").cloned().unwrap_or_else(|| json!(""));
+                    let partial = delta
+                        .get("partial_json")
+                        .cloned()
+                        .unwrap_or_else(|| json!(""));
                     let index = ev.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
                     json!({
                         "id": state.completion_id,
@@ -450,7 +447,10 @@ pub fn anthropic_translate_line<'a>(
                 .and_then(|s| s.as_str())
                 .map(finish_from_anthropic)
                 .unwrap_or("stop");
-            let usage_out = ev.pointer("/usage/output_tokens").cloned().unwrap_or_else(|| json!(0));
+            let usage_out = ev
+                .pointer("/usage/output_tokens")
+                .cloned()
+                .unwrap_or_else(|| json!(0));
             let frame = json!({
                 "id": state.completion_id,
                 "object": "chat.completion.chunk",
@@ -532,14 +532,20 @@ mod tests {
             tool_index: 0,
             skipped: 0,
             finish_seen: false,
+            tool_parts: std::collections::HashMap::new(),
+            skipped_by_type: std::collections::HashMap::new(),
         };
 
         // Text delta.
         let line = r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}"#;
         match super::anthropic_translate_line(line, &mut state) {
             LineOutcome::Emit(frame) => {
-                let parsed: Value = serde_json::from_str(frame.trim_start_matches("data: ").trim()).unwrap();
-                assert_eq!(parsed.pointer("/choices/0/delta/content"), Some(&json!("Hi")));
+                let parsed: Value =
+                    serde_json::from_str(frame.trim_start_matches("data: ").trim()).unwrap();
+                assert_eq!(
+                    parsed.pointer("/choices/0/delta/content"),
+                    Some(&json!("Hi"))
+                );
             }
             _ => panic!("expected Emit"),
         }
@@ -548,8 +554,11 @@ mod tests {
         let line = r#"data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"hmm"}}"#;
         match super::anthropic_translate_line(line, &mut state) {
             LineOutcome::Emit(frame) => {
-                let parsed: Value = serde_json::from_str(frame.trim_start_matches("data: ").trim()).unwrap();
-                assert!(parsed.pointer("/choices/0/delta/reasoning_content").is_some());
+                let parsed: Value =
+                    serde_json::from_str(frame.trim_start_matches("data: ").trim()).unwrap();
+                assert!(parsed
+                    .pointer("/choices/0/delta/reasoning_content")
+                    .is_some());
             }
             _ => panic!("expected Emit"),
         }
@@ -558,7 +567,8 @@ mod tests {
         let start = r#"data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call_9","name":"f"}}"#;
         match super::anthropic_translate_line(start, &mut state) {
             LineOutcome::Emit(frame) => {
-                let parsed: Value = serde_json::from_str(frame.trim_start_matches("data: ").trim()).unwrap();
+                let parsed: Value =
+                    serde_json::from_str(frame.trim_start_matches("data: ").trim()).unwrap();
                 assert_eq!(
                     parsed.pointer("/choices/0/delta/tool_calls/0/function/name"),
                     Some(&json!("f"))
@@ -576,8 +586,12 @@ mod tests {
         let fin = r#"data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":7}}"#;
         match super::anthropic_translate_line(fin, &mut state) {
             LineOutcome::Emit(frame) => {
-                let parsed: Value = serde_json::from_str(frame.trim_start_matches("data: ").trim()).unwrap();
-                assert_eq!(parsed.pointer("/choices/0/finish_reason"), Some(&json!("tool_calls")));
+                let parsed: Value =
+                    serde_json::from_str(frame.trim_start_matches("data: ").trim()).unwrap();
+                assert_eq!(
+                    parsed.pointer("/choices/0/finish_reason"),
+                    Some(&json!("tool_calls"))
+                );
             }
             _ => panic!("expected Emit"),
         }
@@ -607,9 +621,18 @@ mod tests {
         let out = provider
             .parse_non_streaming(&serde_json::to_string(&resp).unwrap(), "claude")
             .unwrap();
-        assert_eq!(out.pointer("/choices/0/finish_reason"), Some(&json!("tool_calls")));
-        assert_eq!(out.pointer("/choices/0/message/reasoning_content"), Some(&json!("let me think")));
-        assert_eq!(out.pointer("/choices/0/message/tool_calls/0/function/name"), Some(&json!("f")));
+        assert_eq!(
+            out.pointer("/choices/0/finish_reason"),
+            Some(&json!("tool_calls"))
+        );
+        assert_eq!(
+            out.pointer("/choices/0/message/reasoning_content"),
+            Some(&json!("let me think"))
+        );
+        assert_eq!(
+            out.pointer("/choices/0/message/tool_calls/0/function/name"),
+            Some(&json!("f"))
+        );
         assert_eq!(out.pointer("/usage/prompt_tokens"), Some(&json!(4)));
     }
 }

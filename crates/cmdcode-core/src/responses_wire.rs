@@ -55,7 +55,6 @@ pub struct ResponseTool {
     pub parameters: Value,
 }
 
-
 /// Incoming `/v1/responses` request body.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ResponsesRequest {
@@ -344,7 +343,10 @@ impl ResponsesStreamRenderer {
         if let Some(id) = &self.response_id {
             json!(id)
         } else {
-            chunk.get("id").cloned().unwrap_or_else(|| json!("resp_cmdcode"))
+            chunk
+                .get("id")
+                .cloned()
+                .unwrap_or_else(|| json!("resp_cmdcode"))
         }
     }
 
@@ -358,7 +360,11 @@ impl ResponsesStreamRenderer {
 
     /// Consume one OpenAI SSE payload, returning rendered event frames.
     pub fn feed(&mut self, payload: &str) -> Vec<String> {
-        let data = payload.trim().strip_prefix("data:").unwrap_or(payload).trim();
+        let data = payload
+            .trim()
+            .strip_prefix("data:")
+            .unwrap_or(payload)
+            .trim();
         if data.is_empty() || self.finished {
             return Vec::new();
         }
@@ -444,7 +450,11 @@ impl ResponsesStreamRenderer {
             .and_then(|f| f.as_str())
             .map(str::to_string)
         {
-            let stop_reason = if finish == "tool_calls" { "function_call" } else { &finish };
+            let stop_reason = if finish == "tool_calls" {
+                "function_call"
+            } else {
+                &finish
+            };
             let _ = stop_reason;
             out.push(Self::frame(
                 "response.completed",
@@ -514,11 +524,14 @@ mod tests {
             Some("get_weather")
         );
         assert_eq!(cc.messages[3].role, "tool");
-        assert_eq!(cc.tools.as_ref().unwrap()[0]
-            .function
-            .as_ref()
-            .unwrap()
-            .name, "get_weather");
+        assert_eq!(
+            cc.tools.as_ref().unwrap()[0]
+                .function
+                .as_ref()
+                .unwrap()
+                .name,
+            "get_weather"
+        );
     }
 
     #[test]

@@ -806,14 +806,24 @@ pub struct UpstreamEvent {
     /// Tool input arguments.
     #[serde(default)]
     pub input: Option<serde_json::Value>,
+    /// Streaming chunk content for AI-SDK `*-delta` events.
+    #[serde(default)]
+    pub delta: Option<String>,
+    /// Event id for AI-SDK step / tool / text events.
+    #[serde(default)]
+    pub id: Option<String>,
     /// Finish reason (e.g. `stop`, `tool_calls`).
     #[serde(default, alias = "finishReason")]
     pub finish_reason: Option<String>,
     /// Raw upstream finish reason before normalization.
     #[serde(default, alias = "rawFinishReason")]
     pub raw_finish_reason: Option<String>,
-    /// Token usage summary in the finish event.
-    #[serde(default, alias = "totalUsage")]
+    /// Token usage summary in the finish event. The AI-SDK `finish-step`
+    /// event carries this under the `usage` key (the legacy format used
+    /// `totalUsage`), so accept both.
+    #[serde(default)]
+    #[serde(alias = "totalUsage")]
+    #[serde(alias = "usage")]
     pub total_usage: Option<UpstreamUsage>,
     /// Error details if the event type is `error`.
     #[serde(default)]

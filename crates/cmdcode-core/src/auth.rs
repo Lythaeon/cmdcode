@@ -325,11 +325,7 @@ impl AuthManager {
         let project_slug = std::path::Path::new(cwd)
             .file_name()
             .and_then(|n| n.to_str())
-            .map(|s| {
-                s.chars()
-                    .filter(|c| !c.is_control())
-                    .collect::<String>()
-            })
+            .map(|s| s.chars().filter(|c| !c.is_control()).collect::<String>())
             .unwrap_or_else(|| "unknown".into());
 
         let mut headers = HashMap::new();

@@ -153,12 +153,9 @@ impl UpstreamClient {
                                         status,
                                         body: err.to_string(),
                                     };
-                                    if provider.is_auth_rejected(status)
-                                        && !auth_retried
-                                    {
-                                        if let Some(name) = provider
-                                            .on_auth_rejected(&self.auth)
-                                            .await
+                                    if provider.is_auth_rejected(status) && !auth_retried {
+                                        if let Some(name) =
+                                            provider.on_auth_rejected(&self.auth).await
                                         {
                                             tracing::warn!(
                                                 account = %name,
@@ -168,8 +165,7 @@ impl UpstreamClient {
                                         } else {
                                             self.auth.invalidate_cache().await;
                                         }
-                                        headers =
-                                            provider.headers(&self.auth, &cwd).await?;
+                                        headers = provider.headers(&self.auth, &cwd).await?;
                                         auth_retried = true;
                                         continue; // refresh once, not against the retry budget
                                     }
@@ -263,6 +259,8 @@ impl UpstreamClient {
                                 tool_index: 0,
                                 skipped: 0,
                                 finish_seen: false,
+                                tool_parts: std::collections::HashMap::new(),
+                                skipped_by_type: std::collections::HashMap::new(),
                             };
 
                             let mut done = false;
@@ -408,10 +406,16 @@ impl UpstreamClient {
                                 }
                             }
 
-                            if state.skipped > 0 {
-                                for _ in 0..state.skipped {
-                                    metrics.inc_skipped();
+                            if !state.skipped_by_type.is_empty() {
+                                for (event_type, count) in &state.skipped_by_type {
+                                    for _ in 0..*count {
+                                        metrics.inc_skipped(event_type);
+                                    }
                                 }
+                                tracing::info!(
+                                    skipped_by_type = ?state.skipped_by_type,
+                                    "upstream events skipped for stream"
+                                );
                             }
                         });
 
@@ -554,11 +558,19 @@ pub struct StreamState<'a> {
     pub tool_index: u32,
     /// Number of malformed / unknown upstream events skipped so far.
     pub skipped: u32,
+    /// Skipped events broken down by upstream event type (for one-line surfacing).
+    pub skipped_by_type: std::collections::HashMap<String, u32>,
     /// Whether a `finish` event has been seen for this stream.
     pub finish_seen: bool,
+    /// Per-call accumulator for the AI-SDK agent protocol: maps a tool-call
+    /// id to `(index, name, concatenated_json_arguments)`. `tool-input-start`
+    /// seeds the entry; `tool-input-delta` appends; `tool-input-end` flushes
+    /// it as a single OpenAI `tool_calls` chunk.
+    pub tool_parts: std::collections::HashMap<String, (u32, String, String)>,
 }
 
 /// Result of translating a single upstream NDJSON line.
+#[derive(Debug, PartialEq)]
 pub enum LineOutcome {
     /// Line was empty, malformed, or an unknown event type — skip it.
     Skip,
@@ -581,7 +593,11 @@ pub fn translate_line(line: &str, state: &mut StreamState) -> LineOutcome {
         Ok(e) => e,
         Err(e) => {
             state.skipped += 1;
-            tracing::warn!(
+            *state
+                .skipped_by_type
+                .entry("<unparseable>".to_string())
+                .or_insert(0) += 1;
+            tracing::debug!(
                 raw_line = %line.chars().take(200).collect::<String>(),
                 error = %e,
                 "skipped unparseable upstream event"
@@ -597,7 +613,11 @@ pub fn translate_line(line: &str, state: &mut StreamState) -> LineOutcome {
             return LineOutcome::Skip;
         }
         "text-delta" => {
-            let text = evt.text.unwrap_or_default();
+            let text = evt
+                .delta
+                .clone()
+                .or_else(|| evt.text.clone())
+                .unwrap_or_default();
             serde_json::json!({
                 "id": state.completion_id,
                 "object": "chat.completion.chunk",
@@ -611,7 +631,11 @@ pub fn translate_line(line: &str, state: &mut StreamState) -> LineOutcome {
             })
         }
         "reasoning-delta" => {
-            let text = evt.text.unwrap_or_default();
+            let text = evt
+                .delta
+                .clone()
+                .or_else(|| evt.text.clone())
+                .unwrap_or_default();
             serde_json::json!({
                 "id": state.completion_id,
                 "object": "chat.completion.chunk",
@@ -715,9 +739,143 @@ pub fn translate_line(line: &str, state: &mut StreamState) -> LineOutcome {
                 serde_json::to_string(&chunk).unwrap_or_default()
             ));
         }
+        // ---- Vercel AI-SDK agent protocol ----
+        // Command Code emits this when `mode: "agent"` drives a tool-using
+        // turn. The proxy previously skipped every one of these events, so
+        // agent responses arrived empty to the client.
+        "text-start" | "text-end" | "reasoning-start" | "reasoning-end" | "start-step"
+        | "provider-metadata" => {
+            // Boundary / metadata events carry no client-visible delta on
+            // their own; the actual content arrives via the `*-delta` events.
+            return LineOutcome::Skip;
+        }
+        "tool-input-start" => {
+            let id = evt.id.clone().unwrap_or_default();
+            if !id.is_empty() {
+                // Seed the accumulator with a stable OpenAI index and the tool
+                // name (only `tool-input-start` carries the name; the end/delta
+                // events reference it by id only).
+                let idx = state.tool_index;
+                state.tool_index += 1;
+                let name = evt.tool_name.clone().unwrap_or_default();
+                state
+                    .tool_parts
+                    .entry(id)
+                    .or_insert((idx, name, String::new()));
+            }
+            return LineOutcome::Skip;
+        }
+        "tool-input-delta" => {
+            if let Some(id) = &evt.id {
+                if let Some((_, _, args)) = state.tool_parts.get_mut(id) {
+                    if let Some(d) = &evt.delta {
+                        args.push_str(d);
+                    }
+                }
+            }
+            return LineOutcome::Skip;
+        }
+        "tool-input-end" | "tool-input-available" => {
+            let id = evt.id.clone().unwrap_or_default();
+            let (idx, name, args) = match state.tool_parts.remove(&id) {
+                Some(v) => v,
+                None => {
+                    let idx = state.tool_index;
+                    state.tool_index += 1;
+                    (
+                        idx,
+                        evt.tool_name.clone().unwrap_or_default(),
+                        String::new(),
+                    )
+                }
+            };
+            let args_str = match &evt.input {
+                Some(serde_json::Value::String(s)) => s.clone(),
+                Some(other) => serde_json::to_string(other).unwrap_or_default(),
+                None => args,
+            };
+            serde_json::json!({
+                "id": state.completion_id,
+                "object": "chat.completion.chunk",
+                "created": state.created,
+                "model": state.model,
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [{
+                            "index": idx,
+                            "id": id,
+                            "type": "function",
+                            "function": {
+                                "name": name,
+                                "arguments": args_str,
+                            }
+                        }]
+                    },
+                    "finish_reason": serde_json::Value::Null,
+                }]
+            })
+        }
+        "finish-step" => {
+            let raw = evt
+                .finish_reason
+                .as_deref()
+                .or(evt.raw_finish_reason.as_deref())
+                .unwrap_or("stop");
+            // Intermediate steps finish with `tool_calls`; only the terminal
+            // step (`stop` / `length`) closes the OpenAI stream.
+            match raw {
+                "stop" | "endTurn" | "length" | "max_tokens" => {
+                    let fr = match raw {
+                        "length" | "max_tokens" => "length",
+                        _ => "stop",
+                    };
+                    state.finish_seen = true;
+                    let mut usage_obj = serde_json::json!({});
+                    if let Some(u) = evt.total_usage.clone() {
+                        if let Some(d) = u.input_token_details {
+                            usage_obj = serde_json::json!({
+                                "prompt_tokens": u.input_tokens.unwrap_or(0),
+                                "completion_tokens": u.output_tokens.unwrap_or(0),
+                                "total_tokens":
+                                    u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0),
+                                "prompt_tokens_details": {
+                                    "cached_tokens": d.cache_read_tokens.unwrap_or(0),
+                                }
+                            });
+                        } else {
+                            usage_obj = serde_json::json!({
+                                "prompt_tokens": u.input_tokens.unwrap_or(0),
+                                "completion_tokens": u.output_tokens.unwrap_or(0),
+                                "total_tokens":
+                                    u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0),
+                            });
+                        }
+                    }
+                    let mut chunk = serde_json::json!({
+                        "id": state.completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": state.created,
+                        "model": state.model,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": fr,
+                        }]
+                    });
+                    chunk["usage"] = usage_obj;
+                    chunk
+                }
+                _ => return LineOutcome::Skip,
+            }
+        }
         _ => {
             state.skipped += 1;
-            tracing::warn!(
+            *state
+                .skipped_by_type
+                .entry(evt.event_type.clone())
+                .or_insert(0) += 1;
+            tracing::debug!(
                 event_type = %evt.event_type,
                 raw_line = %line.chars().take(200).collect::<String>(),
                 "skipped unknown upstream event type"
@@ -784,19 +942,11 @@ pub fn extract_system(messages: &[cmdcode_core::wire_format::OpenAiMessage]) -> 
 /// "no preferences learned yet" block, which primes the agent to record
 /// taste during the session.
 pub async fn read_taste_content(auth_dir: &std::path::Path, cwd: &str) -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
     let global_path = auth_dir.join("taste").join("taste.md");
     let local_path = std::path::Path::new(cwd)
         .join(".commandcode")
         .join("taste")
         .join("taste.md");
-
-    // mtime-based cache: taste files change rarely but are read on every
-    // request. Key = (global mtime secs, local mtime secs); a change in
-    // either invalidates. 0 = missing file.
-    static CACHE_KEY: AtomicU64 = AtomicU64::new(0);
-    static CACHE_VAL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
     async fn mtime_secs(path: &std::path::Path) -> u64 {
         tokio::fs::metadata(path)
@@ -810,10 +960,28 @@ pub async fn read_taste_content(auth_dir: &std::path::Path, cwd: &str) -> String
 
     let g = mtime_secs(&global_path).await;
     let l = mtime_secs(&local_path).await;
-    let key = (g << 32) | (l & 0xffff_ffff);
-    if key != 0 && CACHE_KEY.load(Ordering::Relaxed) == key {
-        if let Some(cached) = CACHE_VAL.get() {
-            return cached.clone();
+    let mtime_key = (g << 32) | (l & 0xffff_ffff);
+
+    // Per-(global, local) cache. Keyed on the actual paths, not just mtimes:
+    // two distinct taste files modified in the same second would otherwise
+    // collide on an mtime-only key and cross-contaminate between projects
+    // (returning one project's taste content for another). A change in either
+    // file's mtime invalidates the entry. A missing file yields mtime_key 0,
+    // which we don't cache (it would mask a later file creation).
+    type TasteCache =
+        std::collections::HashMap<(std::path::PathBuf, std::path::PathBuf), (u64, String)>;
+    static CACHE: std::sync::LazyLock<std::sync::Mutex<TasteCache>> =
+        std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+    if mtime_key != 0 {
+        if let Ok(guard) = CACHE.lock() {
+            if let Some((cached_key, cached_val)) =
+                guard.get(&(global_path.clone(), local_path.clone()))
+            {
+                if *cached_key == mtime_key {
+                    return cached_val.clone();
+                }
+            }
         }
     }
 
@@ -830,29 +998,32 @@ pub async fn read_taste_content(auth_dir: &std::path::Path, cwd: &str) -> String
         }
     }
 
-    if parts.is_empty() {
-        return "<taste>\nNo preferences learned yet for this project. The .commandcode/taste/taste.md file is empty or doesn't exist yet. Preferences will be learned automatically as you work.\n</taste>".into();
+    let rendered = if parts.is_empty() {
+        "<taste>\nNo preferences learned yet for this project. The .commandcode/taste/taste.md file is empty or doesn't exist yet. Preferences will be learned automatically as you work.\n</taste>".into()
+    } else {
+        let raw = parts.join("\n\n");
+        format!(
+            "<taste>\n\
+             Below is the complete content of the .commandcode/taste/taste.md file.\n\
+             This shows you what preferences are available and which categories might have\n\
+             additional details in separate files.\n\
+             If you see references like \"See [category/taste.md]\", you MUST read that file\n\
+             using read_file to get the full preferences.\n\
+             \n\
+             --- Content of .commandcode/taste/taste.md ---\n\
+             \n\
+             {raw}\n\
+             \n\
+             --- End of .commandcode/taste/taste.md ---\n\
+             </taste>"
+        )
+    };
+
+    if mtime_key != 0 {
+        if let Ok(mut guard) = CACHE.lock() {
+            guard.insert((global_path, local_path), (mtime_key, rendered.clone()));
+        }
     }
-    let raw = parts.join("\n\n");
-
-    let rendered = format!(
-        "<taste>\n\
-         Below is the complete content of the .commandcode/taste/taste.md file.\n\
-         This shows you what preferences are available and which categories might have\n\
-         additional details in separate files.\n\
-         If you see references like \"See [category/taste.md]\", you MUST read that file\n\
-         using read_file to get the full preferences.\n\
-         \n\
-         --- Content of .commandcode/taste/taste.md ---\n\
-         \n\
-         {raw}\n\
-         \n\
-         --- End of .commandcode/taste/taste.md ---\n\
-         </taste>"
-    );
-
-    CACHE_KEY.store(key, Ordering::Relaxed);
-    let _ = CACHE_VAL.set(rendered.clone());
     rendered
 }
 
@@ -969,6 +1140,8 @@ mod tests {
             tool_index: 0,
             skipped: 0,
             finish_seen: false,
+            tool_parts: std::collections::HashMap::new(),
+            skipped_by_type: std::collections::HashMap::new(),
         }
     }
 
@@ -1244,6 +1417,8 @@ mod tests {
                 tool_index: 0,
                 skipped: 0,
                 finish_seen: false,
+                tool_parts: std::collections::HashMap::new(),
+                skipped_by_type: std::collections::HashMap::new(),
             };
             match translate_line(&line, &mut s) {
                 LineOutcome::Skip => {}
@@ -1386,5 +1561,91 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_translate_agent_tool_input_protocol() {
+        // Mirrors Command Code's `mode: "agent"` AI-SDK stream for a tool-using
+        // turn, as captured from the live upstream.
+        let mut s = state("chatcmpl-agent", "m1");
+
+        // `start-step` is large metadata and is skipped by the stream buffer;
+        // `tool-input-start` seeds the accumulator and is a no-op here.
+        assert!(matches!(
+            translate_line(
+                r#"{"type":"tool-input-start","id":"call_1","toolName":"read","dynamic":false}"#,
+                &mut s
+            ),
+            LineOutcome::Skip
+        ));
+
+        // Streaming JSON arguments arrive as deltas and accumulate.
+        for d in [r#"{"filePath": ""#, r#"/tmp/x""#, r#"}"#] {
+            let line = format!(
+                r#"{{"type":"tool-input-delta","id":"call_1","delta":{}}}"#,
+                serde_json::to_string(d).unwrap()
+            );
+            assert!(matches!(translate_line(&line, &mut s), LineOutcome::Skip));
+        }
+
+        // `tool-input-end` flushes a single OpenAI `tool_calls` chunk.
+        match translate_line(r#"{"type":"tool-input-end","id":"call_1"}"#, &mut s) {
+            LineOutcome::Emit(p) => {
+                let val: serde_json::Value =
+                    serde_json::from_str(p.trim_start_matches("data: ").trim()).unwrap();
+                let tc = &val["choices"][0]["delta"]["tool_calls"][0];
+                assert_eq!(tc["id"], "call_1");
+                assert_eq!(tc["type"], "function");
+                assert_eq!(tc["function"]["name"], "read");
+                assert_eq!(
+                    tc["function"]["arguments"].as_str().unwrap(),
+                    r#"{"filePath": "/tmp/x"}"#
+                );
+            }
+            _ => panic!("expected Emit for tool-input-end"),
+        }
+
+        // Terminal `finish-step` closes the stream with usage.
+        match translate_line(
+            r#"{"type":"finish-step","finishReason":"stop","usage":{"inputTokens":10,"outputTokens":5}}"#,
+            &mut s,
+        ) {
+            LineOutcome::Emit(p) => {
+                let val: serde_json::Value =
+                    serde_json::from_str(p.trim_start_matches("data: ").trim()).unwrap();
+                assert_eq!(val["choices"][0]["finish_reason"], "stop");
+                assert_eq!(val["usage"]["prompt_tokens"], 10);
+                assert!(s.finish_seen, "finish_seen must be set on terminal step");
+            }
+            _ => panic!("expected Emit for finish-step"),
+        }
+    }
+
+    #[test]
+    fn test_translate_agent_intermediate_tool_calls_step_is_skipped() {
+        // A `finish-step` with finishReason `tool-calls` is an intermediate
+        // step; it must not emit a terminal finish (the final step does).
+        let mut s = state("chatcmpl-agent", "m1");
+        assert!(matches!(
+            translate_line(
+                r#"{"type":"finish-step","finishReason":"tool-calls","rawFinishReason":"tool_calls","usage":{"inputTokens":1,"outputTokens":1}}"#,
+                &mut s
+            ),
+            LineOutcome::Skip
+        ));
+        assert!(!s.finish_seen, "intermediate step must not set finish_seen");
+    }
+
+    #[test]
+    fn test_translate_text_start_end_are_noops() {
+        let mut s = state("chatcmpl-agent", "m1");
+        assert!(matches!(
+            translate_line(r#"{"type":"text-start","id":"txt-0"}"#, &mut s),
+            LineOutcome::Skip
+        ));
+        assert!(matches!(
+            translate_line(r#"{"type":"text-end","id":"txt-0"}"#, &mut s),
+            LineOutcome::Skip
+        ));
     }
 }

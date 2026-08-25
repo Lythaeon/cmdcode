@@ -4,6 +4,73 @@ All notable changes to cmdcode are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-08-25
+
+The provider-agnostic gateway release. cmdcode is no longer only a
+Command Code proxy — it is a multi-provider, multi-protocol LLM gateway
+with taste injection on every path.
+
+### Added
+- **Multi-provider upstream routing** — declare any number of upstreams in
+  `~/.cmdcode/providers.json` (opencode-style providers map) with per-entry
+  adapter type, base URL, `{env:VAR}`-interpolated API keys and model lists.
+  Models route to the provider that declares them; undeclared models fall
+  back to the first entry. `/v1/models` merges all providers with the
+  bundled catalog.
+- **Native Anthropic upstream** (`type: "anthropic"`) — `/v1/messages`
+  protocol: system param, tool_use/tool_result blocks, flat tools,
+  extended-thinking budget from reasoning effort, SSE event translation.
+- **Native Gemini upstream** (`type: "gemini"`) — `:generateContent` /
+  `:streamGenerateContent?alt=sse`: contents/parts, functionCall/
+  functionResponse, functionDeclarations, generationConfig + thinkingConfig.
+- **Anthropic frontend** — `POST /v1/messages` with typed content blocks
+  (text/thinking/tool_use), `x-api-key` auth, full streaming event sequence
+  (`message_start` → `content_block_*` → `message_delta` → `message_stop`).
+- **Google Gemini frontend** — `:generateContent` / `:streamGenerateContent`.
+- **OpenAI Responses API frontend** — `POST /v1/responses` (stateless subset)
+  plus a server-side session store: responses chain via
+  `previous_response_id` (1h TTL, 10k cap, stored only after confirmed
+  completion). Server-assigned `resp_*` ids stamped into streamed events.
+- **Ollama-native frontend** — `/api/chat` NDJSON streaming + `/api/tags`.
+- **`cmdcode connect`** — manage providers from the CLI: interactive TUI
+  (mirrors `auth`), plus non-interactive `add | list | enable | disable |
+  remove | test`. Changes hot-reload; no proxy restart.
+- **Hot reload** — the provider router stats the config per request and swaps
+  atomically on mtime change. Broken or removed config files retain the
+  last-good router instead of degrading.
+- **Runtime enable/disable** — `"enabled": false` on any provider entry;
+  disabled entries drop out of routing and `/v1/models`; all-disabled yields
+  a clean 503.
+
+### Fixed
+- **Per-request subprocess spawn (~600ms tax)** — CLI version detection ran
+  `command-code --version` on every upstream call; now cached process-wide.
+  Concurrency-matrix p99 dropped from 30s timeouts to sub-millisecond.
+- **Streaming routed to wrong translator** — the main stream loop hardcoded
+  the Command Code translator, breaking all other adapters' streams.
+- **Gemini tool-arg corruption** — argument fragments were emitted as text
+  parts; now buffered and flushed as complete `functionCall` parts.
+- **Taste cache staleness** — replaced an append-only cache that could serve
+  outdated taste content after key changes.
+- **Credit-exhaustion rotation** — command-code returns 400 "insufficient
+  credits" (not 401/429); account rotation now triggers on it too.
+- **Input validation** — Gemini empty `contents` / Ollama empty `messages`
+  return protocol-shaped 400s instead of forwarding to upstream.
+- Per-client rate-limit buckets now keyed by presented credential even when
+  the proxy itself does not require auth.
+- Session store inserts deferred to confirmed completion so failed
+  generations do not pollute chained context.
+
+### Security
+- Control-character stripping on header-derived values (project slug)
+  prevents CR/LF injection from crafted working directories.
+
+### Performance
+- Taste content cached against file mtimes instead of two disk reads per
+  request.
+
+**Compare**: https://github.com/Lythaeon/cmdcode/compare/v0.3.0...v0.4.0
+
 ## [0.3.0] - 2026-08-22
 
 ### Added

@@ -210,19 +210,11 @@ impl Provider for GeminiProvider {
         body
     }
 
-    fn translate_line<'a>(
-        &self,
-        line: &str,
-        state: &mut StreamState<'a>,
-    ) -> LineOutcome {
+    fn translate_line<'a>(&self, line: &str, state: &mut StreamState<'a>) -> LineOutcome {
         gemini_translate_line(line, state)
     }
 
-    fn parse_non_streaming(
-        &self,
-        text: &str,
-        model: &str,
-    ) -> Result<Value, UpstreamError> {
+    fn parse_non_streaming(&self, text: &str, model: &str) -> Result<Value, UpstreamError> {
         let parsed: Value = serde_json::from_str(text).map_err(|e| UpstreamError::HttpError {
             status: 502,
             body: format!("invalid gemini response: {e}"),
@@ -282,7 +274,11 @@ pub fn gemini_to_completion(resp: &Value, model: &str) -> Value {
 
     // A tool-call turn reports finishReason STOP in Gemini; surface
     // tool_calls as the OpenAI finish reason when calls are present.
-    let finish = if !tool_calls.is_empty() { "tool_calls" } else { finish_reason };
+    let finish = if !tool_calls.is_empty() {
+        "tool_calls"
+    } else {
+        finish_reason
+    };
 
     let input = resp
         .pointer("/usageMetadata/promptTokenCount")
@@ -319,10 +315,7 @@ pub fn gemini_to_completion(resp: &Value, model: &str) -> Value {
 }
 
 /// Translate one line of Gemini SSE (`alt=sse`) into OpenAI chunk frames.
-pub fn gemini_translate_line<'a>(
-    line: &str,
-    state: &mut StreamState<'a>,
-) -> LineOutcome {
+pub fn gemini_translate_line<'a>(line: &str, state: &mut StreamState<'a>) -> LineOutcome {
     let trimmed = line.trim();
     if trimmed.is_empty() || !trimmed.starts_with("data:") {
         return LineOutcome::Skip;
@@ -348,8 +341,9 @@ pub fn gemini_translate_line<'a>(
             }
             if let Some(call) = part.get("functionCall") {
                 let name = call.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                let args = serde_json::to_string(&call.get("args").cloned().unwrap_or_else(|| json!({})))
-                    .unwrap_or_default();
+                let args =
+                    serde_json::to_string(&call.get("args").cloned().unwrap_or_else(|| json!({})))
+                        .unwrap_or_default();
                 deltas.push(json!({"tool_calls": [{
                     "index": 0,
                     "id": format!("call_{name}"),
@@ -365,7 +359,9 @@ pub fn gemini_translate_line<'a>(
         return LineOutcome::Skip;
     }
 
-    let delta = if deltas.is_empty() { json!({}) } else {
+    let delta = if deltas.is_empty() {
+        json!({})
+    } else {
         // Merge into a single choice delta.
         let mut content = String::new();
         let mut tool_calls: Vec<Value> = Vec::new();
@@ -406,7 +402,10 @@ pub fn gemini_translate_line<'a>(
         });
     }
 
-    let payload = format!("data: {}\n\n", serde_json::to_string(&frame).unwrap_or_default());
+    let payload = format!(
+        "data: {}\n\n",
+        serde_json::to_string(&frame).unwrap_or_default()
+    );
     if has_finish {
         LineOutcome::EmitAndStop(payload)
     } else {
@@ -456,10 +455,7 @@ mod tests {
         };
         let model = ModelId::new("gemini-2.5-pro");
         let out = provider.build_body(&ctx(&body, &model));
-        assert_eq!(
-            out["systemInstruction"]["parts"][0]["text"],
-            "Be terse."
-        );
+        assert_eq!(out["systemInstruction"]["parts"][0]["text"], "Be terse.");
         // [0]=user, [1]=model(functionCall), [2]=user(functionResponse)
         assert_eq!(out["contents"][1]["role"], "model");
         assert_eq!(
@@ -470,7 +466,10 @@ mod tests {
             out["contents"][2]["parts"][0]["functionResponse"]["name"],
             "get_weather"
         );
-        assert_eq!(out["tools"][0]["functionDeclarations"][0]["name"], "get_weather");
+        assert_eq!(
+            out["tools"][0]["functionDeclarations"][0]["name"],
+            "get_weather"
+        );
         assert_eq!(body.temperature, Some(0.3));
     }
 
@@ -483,14 +482,20 @@ mod tests {
             tool_index: 0,
             skipped: 0,
             finish_seen: false,
+            tool_parts: std::collections::HashMap::new(),
+            skipped_by_type: std::collections::HashMap::new(),
         };
 
         // Text chunk.
         let line = r#"data: {"candidates":[{"content":{"role":"model","parts":[{"text":"He"}]},"index":0}]}"#;
         match gemini_translate_line(line, &mut state) {
             LineOutcome::Emit(frame) => {
-                let parsed: Value = serde_json::from_str(frame.trim_start_matches("data: ").trim()).unwrap();
-                assert_eq!(parsed.pointer("/choices/0/delta/content"), Some(&json!("He")));
+                let parsed: Value =
+                    serde_json::from_str(frame.trim_start_matches("data: ").trim()).unwrap();
+                assert_eq!(
+                    parsed.pointer("/choices/0/delta/content"),
+                    Some(&json!("He"))
+                );
             }
             _ => panic!("expected Emit"),
         }
@@ -500,7 +505,8 @@ mod tests {
             {"functionCall":{"name":"get_weather","args":{"city":"Paris"}}}]},"index":0}]}"#;
         match gemini_translate_line(line, &mut state) {
             LineOutcome::Emit(frame) => {
-                let parsed: Value = serde_json::from_str(frame.trim_start_matches("data: ").trim()).unwrap();
+                let parsed: Value =
+                    serde_json::from_str(frame.trim_start_matches("data: ").trim()).unwrap();
                 assert_eq!(
                     parsed.pointer("/choices/0/delta/tool_calls/0/function/name"),
                     Some(&json!("get_weather"))
@@ -522,7 +528,10 @@ mod tests {
                 // [DONE] is appended by the stream loop; frame is the final chunk.
                 let payload = frame.trim_start_matches("data: ").trim();
                 let parsed: Value = serde_json::from_str(payload).unwrap();
-                assert_eq!(parsed.pointer("/choices/0/finish_reason"), Some(&json!("stop")));
+                assert_eq!(
+                    parsed.pointer("/choices/0/finish_reason"),
+                    Some(&json!("stop"))
+                );
                 assert_eq!(parsed.pointer("/usage/prompt_tokens"), Some(&json!(4)));
             }
             _ => panic!("expected EmitAndStop"),
@@ -545,7 +554,10 @@ mod tests {
         let out = provider
             .parse_non_streaming(&serde_json::to_string(&resp).unwrap(), "gemini")
             .unwrap();
-        assert_eq!(out.pointer("/choices/0/message/content"), Some(&json!("22C")));
+        assert_eq!(
+            out.pointer("/choices/0/message/content"),
+            Some(&json!("22C"))
+        );
         assert_eq!(out.pointer("/usage/total_tokens"), Some(&json!(7)));
     }
 }

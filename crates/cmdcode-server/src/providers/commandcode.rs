@@ -1,11 +1,13 @@
 //! Command Code upstream adapter (`/alpha/generate` NDJSON protocol).
 
 use super::{Provider, RequestContext};
+use crate::upstream::{build_config, extract_system, is_auth_rejected, LineOutcome, StreamState};
 use cmdcode_core::auth::AuthManager;
 use cmdcode_core::error::UpstreamError;
-use crate::upstream::{build_config, extract_system, is_auth_rejected, LineOutcome, StreamState};
 use cmdcode_core::types::FinishReason;
-use cmdcode_core::wire_format::{build_completion, wire_messages, wire_tools, CcUsage, UpstreamEvent};
+use cmdcode_core::wire_format::{
+    build_completion, wire_messages, wire_tools, CcUsage, UpstreamEvent,
+};
 use std::sync::Arc;
 
 /// Command Code provider — CLI-fingerprint headers, vault auth with rotation.
@@ -101,11 +103,7 @@ impl Provider for CommandCodeProvider {
         })
     }
 
-    fn translate_line<'a>(
-        &self,
-        line: &str,
-        state: &mut StreamState<'a>,
-    ) -> LineOutcome {
+    fn translate_line<'a>(&self, line: &str, state: &mut StreamState<'a>) -> LineOutcome {
         crate::upstream::translate_line(line, state)
     }
 

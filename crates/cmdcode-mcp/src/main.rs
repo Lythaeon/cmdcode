@@ -6,7 +6,12 @@
 //!
 //! Usage: `cmdcode-mcp` (stdio transport for MCP clients)
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::or_fun_call)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::or_fun_call
+)]
 
 use futures_util::StreamExt;
 use serde_json::{json, Value};
@@ -27,13 +32,11 @@ fn taste_file() -> PathBuf {
 
 fn upstream_url() -> String {
     // The CLI's free taste/generate endpoint base.
-    std::env::var("COMMAND_CODE_API_BASE")
-        .unwrap_or_else(|_| "https://api.commandcode.ai".into())
+    std::env::var("COMMAND_CODE_API_BASE").unwrap_or_else(|_| "https://api.commandcode.ai".into())
 }
 
 fn upstream_model() -> String {
-    std::env::var("COMMAND_CODE_PROXY_DEFAULT")
-        .unwrap_or_else(|_| "xiaomi/mimo-v2.5".into())
+    std::env::var("COMMAND_CODE_PROXY_DEFAULT").unwrap_or_else(|_| "xiaomi/mimo-v2.5".into())
 }
 
 // --- MCP JSON-RPC server ---
@@ -80,7 +83,6 @@ fn taste_tool_schema() -> Value {
     })
 }
 
-
 /// Where taste-learning requests are sent, derived from the opencode-style
 /// providers config (`~/.cmdcode/providers.json`).
 #[derive(Debug, Clone)]
@@ -103,9 +105,7 @@ fn resolve_learning_target() -> LearningTarget {
     if let Some(cfg) = loaded {
         // Explicit learning flag wins, then a command-code entry, then any.
         let pick = |pred: &dyn Fn(&cmdcode_core::provider_config::ProviderEntry) -> bool| {
-            cfg.entries()
-                .find(|(_, e)| pred(e))
-                .map(|(_, e)| e)
+            cfg.entries().find(|(_, e)| pred(e)).map(|(_, e)| e)
         };
         let chosen = pick(&|e| e.learning)
             .or_else(|| pick(&|e| e.kind() == AdapterKind::CommandCode))
@@ -122,14 +122,20 @@ fn resolve_learning_target() -> LearningTarget {
                 AdapterKind::CommandCode => LearningTarget::CommandCode {
                     url: format!(
                         "{}/alpha/generate",
-                        entry.base_url().unwrap_or_else(upstream_url).trim_end_matches('/')
+                        entry
+                            .base_url()
+                            .unwrap_or_else(upstream_url)
+                            .trim_end_matches('/')
                     ),
                     model,
                 },
                 AdapterKind::OpenAi => LearningTarget::OpenAi {
                     url: format!(
                         "{}/chat/completions",
-                        entry.base_url().unwrap_or_else(upstream_url).trim_end_matches('/')
+                        entry
+                            .base_url()
+                            .unwrap_or_else(upstream_url)
+                            .trim_end_matches('/')
                     ),
                     api_key: entry.api_key(),
                     model,
@@ -137,10 +143,12 @@ fn resolve_learning_target() -> LearningTarget {
                 // Native Anthropic/Gemini upstreams speak proprietary wire
                 // formats; the MCP learning path only supports command-code
                 // and OpenAI-compatible targets (filtered above).
-                _ => return LearningTarget::CommandCode {
-                    url: format!("{}/alpha/generate", upstream_url()),
-                    model: upstream_model(),
-                },
+                _ => {
+                    return LearningTarget::CommandCode {
+                        url: format!("{}/alpha/generate", upstream_url()),
+                        model: upstream_model(),
+                    }
+                }
             };
         }
     }
@@ -170,10 +178,7 @@ fn taste_tool_schema_cc() -> Value {
 }
 
 /// Execute completed `write_taste_file` calls collected as (name, args-json).
-fn execute_taste_calls(
-    pending: Vec<(String, String)>,
-    text_out: &str,
-) -> Result<String, String> {
+fn execute_taste_calls(pending: Vec<(String, String)>, text_out: &str) -> Result<String, String> {
     let mut results = Vec::new();
     for (tool_name, input_str) in pending {
         if tool_name != "write_taste_file" {
@@ -311,8 +316,11 @@ async fn handle_taste_call(instruction: &str) -> Result<String, String> {
                     };
                     match ev.get("type").and_then(|t| t.as_str()).unwrap_or("") {
                         "tool-input-start" => {
-                            let id =
-                                ev.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
+                            let id = ev
+                                .get("id")
+                                .and_then(|i| i.as_str())
+                                .unwrap_or("")
+                                .to_string();
                             let name = ev
                                 .get("toolName")
                                 .and_then(|n| n.as_str())
@@ -337,11 +345,14 @@ async fn handle_taste_call(instruction: &str) -> Result<String, String> {
                 }
             }
 
-            let collected: Vec<(String, String)> =
-                pending.into_values().collect();
+            let collected: Vec<(String, String)> = pending.into_values().collect();
             execute_taste_calls(collected, &text_out)
         }
-        LearningTarget::OpenAi { url, api_key, model } => {
+        LearningTarget::OpenAi {
+            url,
+            api_key,
+            model,
+        } => {
             // Generic OpenAI-compatible path: one-shot completion, tool calls
             // parsed from the response message.
             let body = json!({
@@ -620,10 +631,7 @@ async fn main() {
         };
 
         let id = req.get("id").cloned();
-        let method = req
-            .get("method")
-            .and_then(|m| m.as_str())
-            .unwrap_or("");
+        let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
         eprintln(&format!("method: {method}"));
 
         match method {
@@ -654,10 +662,7 @@ async fn main() {
             }
             "tools/call" => {
                 let params = req.get("params").cloned().unwrap_or(json!({}));
-                let name = params
-                    .get("name")
-                    .and_then(|n| n.as_str())
-                    .unwrap_or("");
+                let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
 
                 if name != "taste" {
                     write_jsonrpc_error(id, -32601, format!("Unknown tool: {name}"));
@@ -672,10 +677,7 @@ async fn main() {
 
                 match handle_taste_call(instruction).await {
                     Ok(msg) => {
-                        write_jsonrpc(
-                            id,
-                            json!({"content": [{"type": "text", "text": msg}]}),
-                        );
+                        write_jsonrpc(id, json!({"content": [{"type": "text", "text": msg}]}));
                     }
                     Err(e) => {
                         write_jsonrpc_error(id, -32603, e);

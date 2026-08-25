@@ -5,7 +5,7 @@ mod cli;
 mod commands;
 
 use clap::Parser;
-use cli::{AuthCommand, ConnectCommand, Cli, Commands, SetupCommand};
+use cli::{AuthCommand, Cli, Commands, ConnectCommand, SetupCommand};
 
 fn main() {
     let cli = Cli::parse();

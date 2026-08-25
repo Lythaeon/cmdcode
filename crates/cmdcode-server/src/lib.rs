@@ -7,10 +7,10 @@ pub mod handler;
 pub mod logging;
 /// Prometheus-style metrics counters and rendering.
 pub mod metrics;
-/// Server-side response-session storage for the Responses API.
-pub mod session_store;
 /// Upstream provider adapters (command-code, openai, ...).
 pub mod providers;
+/// Server-side response-session storage for the Responses API.
+pub mod session_store;
 /// Upstream HTTP client with retry and SSE streaming.
 pub mod upstream;
 
@@ -101,8 +101,8 @@ impl ProxyService {
             upstream_client,
             metrics,
             rate_limiter,
-                sessions: Arc::new(crate::session_store::ResponseSessionStore::default()),
-};
+            sessions: Arc::new(crate::session_store::ResponseSessionStore::default()),
+        };
 
         let mut my_proxy = handler::create_http_proxy_service(&server.configuration, ctx);
 

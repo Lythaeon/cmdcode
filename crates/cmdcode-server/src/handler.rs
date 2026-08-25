@@ -230,30 +230,30 @@ impl ProxyHttp for CommandCodeProxy {
             }
         }
 
-        // Optional incoming-auth gate. /health and /metrics stay open for
-        // monitors and scrapers; every other route requires the token.
+        // Identify the client for rate limiting: their bearer token or
+        // x-api-key when present, else a shared anonymous bucket. /health,
+        // /metrics stay open for monitors; every other route validates the
+        // token when COMMAND_CODE_PROXY_INCOMING_TOKEN is set.
         let frontend = detect_frontend(&path);
+        let headers = &session.req_header().headers;
+        let bearer = headers
+            .get(http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .unwrap_or("");
+        // Anthropic clients authenticate with x-api-key instead.
+        let x_api_key = headers
+            .get("x-api-key")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let client_credential = if !bearer.is_empty() {
+            bearer
+        } else {
+            x_api_key
+        };
+
         let api_key = if let Some(ref expected) = self.config.incoming_token {
-            let headers = &session.req_header().headers;
-            let bearer = headers
-                .get(http::header::AUTHORIZATION)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.strip_prefix("Bearer "))
-                .unwrap_or("");
-            // Anthropic clients authenticate with x-api-key instead.
-            let x_api_key = headers
-                .get("x-api-key")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-            let (provided, via_key_header) = if !bearer.is_empty() {
-                (bearer, false)
-            } else if !x_api_key.is_empty() {
-                (x_api_key, true)
-            } else {
-                ("", false)
-            };
-            let _ = via_key_header;
-            if !constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+            if !constant_time_eq(client_credential.as_bytes(), expected.as_bytes()) {
                 self.metrics.inc_error();
                 let err = serde_json::json!({
                     "error": {
@@ -264,8 +264,13 @@ impl ProxyHttp for CommandCodeProxy {
                 self.send_json(session, 401, &err).await?;
                 return Ok(true);
             }
-            provided.to_string()
+            client_credential.to_string()
         } else {
+            // No gate configured: leave the bucket key empty so the rate
+            // limiter treats unauthenticated traffic as unlimited (its
+            // empty-key fast path), matching the open-proxy contract. The
+            // presented credential is intentionally NOT used as the bucket
+            // here — rate limiting only applies once a gate enforces identity.
             String::new()
         };
 
@@ -331,14 +336,9 @@ impl ProxyHttp for CommandCodeProxy {
         };
 
         let mut gemini_model: Option<String> = None;
-        let mut anthropic_request: Option<
-            cmdcode_core::anthropic_wire::AnthropicRequest,
-        > = None;
-        let mut responses_request: Option<
-            cmdcode_core::responses_wire::ResponsesRequest,
-        > = None;
-        let mut ollama_request: Option<cmdcode_core::ollama_wire::OllamaChatRequest> =
-            None;
+        let mut anthropic_request: Option<cmdcode_core::anthropic_wire::AnthropicRequest> = None;
+        let mut responses_request: Option<cmdcode_core::responses_wire::ResponsesRequest> = None;
+        let mut ollama_request: Option<cmdcode_core::ollama_wire::OllamaChatRequest> = None;
         let mut gemini_request: Option<cmdcode_core::gemini_wire::GeminiRequest> = None;
 
         if frontend == Frontend::Gemini {
@@ -348,9 +348,7 @@ impl ProxyHttp for CommandCodeProxy {
                 .and_then(|(_, rest)| rest.split(':').next())
                 .unwrap_or("");
             gemini_model = Some(model_seg.to_string());
-            match serde_json::from_value::<cmdcode_core::gemini_wire::GeminiRequest>(
-                raw_body,
-            ) {
+            match serde_json::from_value::<cmdcode_core::gemini_wire::GeminiRequest>(raw_body) {
                 Ok(r) => gemini_request = Some(r),
                 Err(e) => {
                     self.metrics.inc_bad_requests();
@@ -365,9 +363,7 @@ impl ProxyHttp for CommandCodeProxy {
                 }
             }
         } else if frontend == Frontend::Anthropic {
-            match serde_json::from_value::<
-                cmdcode_core::anthropic_wire::AnthropicRequest,
-            >(raw_body)
+            match serde_json::from_value::<cmdcode_core::anthropic_wire::AnthropicRequest>(raw_body)
             {
                 Ok(r) => anthropic_request = Some(r),
                 Err(e) => {
@@ -382,13 +378,12 @@ impl ProxyHttp for CommandCodeProxy {
                                     "message": format!("Invalid request body: {e}")},
                             }),
                         )
-                        .await.map(|()| true);
+                        .await
+                        .map(|()| true);
                 }
             }
         } else if frontend == Frontend::Responses {
-            match serde_json::from_value::<
-                cmdcode_core::responses_wire::ResponsesRequest,
-            >(raw_body)
+            match serde_json::from_value::<cmdcode_core::responses_wire::ResponsesRequest>(raw_body)
             {
                 Ok(r) => responses_request = Some(r),
                 Err(e) => {
@@ -401,14 +396,12 @@ impl ProxyHttp for CommandCodeProxy {
                                 format!("Invalid request body: {e}"),
                                 "type": "invalid_request_error"}}),
                         )
-                        .await.map(|()| true);
+                        .await
+                        .map(|()| true);
                 }
             }
         } else if frontend == Frontend::Ollama {
-            match serde_json::from_value::<
-                cmdcode_core::ollama_wire::OllamaChatRequest,
-            >(raw_body)
-            {
+            match serde_json::from_value::<cmdcode_core::ollama_wire::OllamaChatRequest>(raw_body) {
                 Ok(r) => ollama_request = Some(r),
                 Err(e) => {
                     self.metrics.inc_bad_requests();
@@ -418,7 +411,8 @@ impl ProxyHttp for CommandCodeProxy {
                             400,
                             &serde_json::json!({"error": format!("Invalid request body: {e}")}),
                         )
-                        .await.map(|()| true);
+                        .await
+                        .map(|()| true);
                 }
             }
         }
@@ -490,6 +484,10 @@ impl ProxyHttp for CommandCodeProxy {
         // conversation when previous_response_id is present, and assign our
         // own resp_* id so the client can reference this turn later.
         let mut responses_resp_id: Option<String> = None;
+        let mut pending_session_entry: Option<(
+            String,
+            Vec<cmdcode_core::wire_format::OpenAiMessage>,
+        )> = None;
         if let Some(rreq) = &responses_request {
             if let Some(prev_id) = &rreq.previous_response_id {
                 let Some(stored) = self.sessions.get(prev_id) else {
@@ -507,8 +505,15 @@ impl ProxyHttp for CommandCodeProxy {
                 // Prepend the stored conversation; drop the converted request's
                 // own leading system message if the stored one already has it.
                 let mut messages = stored;
-                let skip_system = messages.first().map(|m| m.role == "system").unwrap_or(false)
-                    && body.messages.first().map(|m| m.role == "system").unwrap_or(false);
+                let skip_system = messages
+                    .first()
+                    .map(|m| m.role == "system")
+                    .unwrap_or(false)
+                    && body
+                        .messages
+                        .first()
+                        .map(|m| m.role == "system")
+                        .unwrap_or(false);
                 for (i, m) in body.messages.into_iter().enumerate() {
                     if i == 0 && skip_system {
                         continue;
@@ -518,7 +523,10 @@ impl ProxyHttp for CommandCodeProxy {
                 body.messages = messages;
             }
             let id = format!("resp_{}", uuid::Uuid::new_v4());
-            self.sessions.insert(id.clone(), body.messages.clone());
+            // Storage is deferred until the upstream confirms completion
+            // (non-streaming success or clean stream finish) so failed
+            // generations don't pollute chained context.
+            pending_session_entry = Some((id.clone(), body.messages.clone()));
             responses_resp_id = Some(id);
         }
 
@@ -567,6 +575,9 @@ impl ProxyHttp for CommandCodeProxy {
                     elapsed_ms = start.elapsed().as_millis() as u64,
                     "completed (non-stream)"
                 );
+                if let Some((ref id, ref msgs)) = pending_session_entry {
+                    self.sessions.insert(id.clone(), msgs.clone());
+                }
                 let out = match frontend {
                     Frontend::Anthropic => cmdcode_core::anthropic_wire::completion_to_anthropic(
                         &completion,
@@ -582,14 +593,12 @@ impl ProxyHttp for CommandCodeProxy {
                         }
                         r
                     }
-                    Frontend::Gemini => cmdcode_core::gemini_wire::completion_to_gemini(
-                        &completion,
-                        model.as_str(),
-                    ),
-                    Frontend::Ollama => cmdcode_core::ollama_wire::completion_to_ollama(
-                        &completion,
-                        model.as_str(),
-                    ),
+                    Frontend::Gemini => {
+                        cmdcode_core::gemini_wire::completion_to_gemini(&completion, model.as_str())
+                    }
+                    Frontend::Ollama => {
+                        cmdcode_core::ollama_wire::completion_to_ollama(&completion, model.as_str())
+                    }
                     Frontend::OpenAi => completion,
                 };
                 self.metrics.inc_bytes_out(out.to_string().len());
@@ -597,6 +606,8 @@ impl ProxyHttp for CommandCodeProxy {
                 Ok(true)
             }
             Ok(upstream::UpstreamResponse::Sse { rx, cancel }) => {
+                use crate::handler::StreamRenderer;
+                let session_entry = pending_session_entry.take();
                 let renderer = match frontend {
                     Frontend::Anthropic => Some(StreamRenderer::Anthropic(
                         cmdcode_core::anthropic_wire::AnthropicStreamRenderer::new(),
@@ -604,12 +615,16 @@ impl ProxyHttp for CommandCodeProxy {
                     Frontend::Gemini => Some(StreamRenderer::Gemini(
                         cmdcode_core::gemini_wire::GeminiStreamRenderer::new(),
                     )),
-                    Frontend::Responses => Some(StreamRenderer::Responses(
-                        match &responses_resp_id {
-                            Some(id) => cmdcode_core::responses_wire::ResponsesStreamRenderer::new_with_id(id.clone()),
+                    Frontend::Responses => {
+                        Some(StreamRenderer::Responses(match &responses_resp_id {
+                            Some(id) => {
+                                cmdcode_core::responses_wire::ResponsesStreamRenderer::new_with_id(
+                                    id.clone(),
+                                )
+                            }
                             None => cmdcode_core::responses_wire::ResponsesStreamRenderer::new(),
-                        },
-                    )),
+                        }))
+                    }
                     Frontend::Ollama => Some(StreamRenderer::Ollama(
                         cmdcode_core::ollama_wire::OllamaStreamRenderer::new(model.as_str()),
                     )),
@@ -624,6 +639,7 @@ impl ProxyHttp for CommandCodeProxy {
                     effort,
                     start,
                     renderer,
+                    session_entry,
                 )
                 .await
             }
@@ -686,6 +702,7 @@ impl CommandCodeProxy {
         effort: Option<Effort>,
         start: std::time::Instant,
         mut anthropic_renderer: Option<StreamRenderer>,
+        session_entry: Option<(String, Vec<cmdcode_core::wire_format::OpenAiMessage>)>,
     ) -> PingoraResult<bool> {
         tracing::info!(
             elapsed_ms = start.elapsed().as_millis() as u64,
@@ -921,6 +938,12 @@ impl CommandCodeProxy {
 
         if client_gone || abort {
             cancel.cancel();
+        }
+        if !client_gone && !abort {
+            // Confirmed completion — persist the conversation for chaining.
+            if let Some((id, msgs)) = session_entry {
+                self.sessions.insert(id, msgs);
+            }
         }
         if !client_gone {
             let _ = session.write_response_body(None, true).await;

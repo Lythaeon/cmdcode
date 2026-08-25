@@ -163,13 +163,12 @@ impl AnthropicRequest {
             let role = msg.role.as_str();
             if role == "user" {
                 if let Some(blocks) = msg.content.as_array() {
-                    let has_tool_results = blocks.iter().any(|b| {
-                        b.get("type").and_then(|t| t.as_str()) == Some("tool_result")
-                    });
+                    let has_tool_results = blocks
+                        .iter()
+                        .any(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_result"));
                     if has_tool_results {
                         for block in blocks {
-                            if block.get("type").and_then(|t| t.as_str()) != Some("tool_result")
-                            {
+                            if block.get("type").and_then(|t| t.as_str()) != Some("tool_result") {
                                 continue;
                             }
                             let id = block
@@ -219,10 +218,7 @@ impl AnthropicRequest {
                                 )
                                 .unwrap_or_default();
                                 tool_calls.push(OpenAiToolCall {
-                                    id: block
-                                        .get("id")
-                                        .and_then(|v| v.as_str())
-                                        .map(String::from),
+                                    id: block.get("id").and_then(|v| v.as_str()).map(String::from),
                                     function: Some(OpenAiFunctionRef {
                                         name: block
                                             .get("name")
@@ -591,8 +587,9 @@ impl AnthropicStreamRenderer {
                             ));
                         }
                         if let Some(args) = args.filter(|a| !a.is_empty()) {
-                            let (index, _) =
-                                self.open_block.unwrap_or((self.next_index, BlockKind::ToolUse));
+                            let (index, _) = self
+                                .open_block
+                                .unwrap_or((self.next_index, BlockKind::ToolUse));
                             out.push(Self::frame(
                                 "content_block_delta",
                                 json!({
@@ -680,10 +677,7 @@ mod tests {
         // Tools flattened to OpenAI function form.
         let tool = &cc.tools.as_ref().unwrap()[0];
         assert_eq!(tool.tool_type, "function");
-        assert_eq!(
-            tool.function.as_ref().unwrap().name,
-            "get_weather"
-        );
+        assert_eq!(tool.function.as_ref().unwrap().name, "get_weather");
     }
 
     #[test]
@@ -692,15 +686,17 @@ mod tests {
         // user text -> assistant(tool_use) -> tool(result)
         assert_eq!(cc.messages[1].role, "user");
         assert_eq!(cc.messages[2].role, "assistant");
-        assert_eq!(cc.messages[2].tool_calls.as_ref().unwrap()[0]
-            .function.as_ref().unwrap().name.as_deref(),
+        assert_eq!(
+            cc.messages[2].tool_calls.as_ref().unwrap()[0]
+                .function
+                .as_ref()
+                .unwrap()
+                .name
+                .as_deref(),
             Some("get_weather")
         );
         assert_eq!(cc.messages[3].role, "tool");
-        assert_eq!(
-            cc.messages[3].tool_call_id.as_deref(),
-            Some("call_1")
-        );
+        assert_eq!(cc.messages[3].tool_call_id.as_deref(), Some("call_1"));
     }
 
     #[test]

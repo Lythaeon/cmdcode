@@ -614,9 +614,7 @@ async fn test_concurrent_mixed_methods() {
     let mut success = 0;
     for h in handles {
         if h.await.unwrap() == 1 {
-
             success += 1;
-
         }
     }
 
@@ -801,7 +799,9 @@ async fn test_benchmark_through_proxy_vs_direct() {
         tls_cert: None,
         tls_key: None,
         incoming_token: None,
-        rate_limit_max_requests: 100,
+        // Perf benchmark fires 520 requests — the 100/60s limiter would
+        // throttle it; rate limiting is covered by its own dedicated test.
+        rate_limit_max_requests: 0,
         rate_limit_window_secs: 60,
         rate_limit_backend: cmdcode_core::types::RateLimitBackend::Local,
         rate_limit_redis_url: None,
@@ -1886,9 +1886,17 @@ async fn test_all_frontends_no_collision() {
         .json(&serde_json::json!({
             "model": model, "messages": [{"role":"user","content":"hi"}]
         }))
-        .send().await.unwrap()
-        .json().await.unwrap();
-    assert_eq!(r.pointer("/choices/0/message/content").and_then(|v| v.as_str()), Some("Hello world"));
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.pointer("/choices/0/message/content")
+            .and_then(|v| v.as_str()),
+        Some("Hello world")
+    );
     assert_eq!(r["object"], "chat.completion");
 
     // Anthropic non-streaming
@@ -1899,8 +1907,12 @@ async fn test_all_frontends_no_collision() {
             "model": model, "max_tokens": 100,
             "messages": [{"role":"user","content":"hi"}]
         }))
-        .send().await.unwrap()
-        .json().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(r["type"], "message");
     assert_eq!(r["content"][0]["type"], "text");
     assert_eq!(r["stop_reason"], "end_turn");
@@ -1909,8 +1921,12 @@ async fn test_all_frontends_no_collision() {
     let r: serde_json::Value = client
         .post(format!("{proxy}/v1beta/models/{model}:generateContent"))
         .json(&serde_json::json!({"contents":[{"role":"user","parts":[{"text":"hi"}]}]}))
-        .send().await.unwrap()
-        .json().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(r["candidates"][0]["content"]["role"], "model");
     assert_eq!(r["candidates"][0]["finishReason"], "STOP");
     assert!(r["usageMetadata"]["totalTokenCount"].as_u64().unwrap() > 0);
@@ -1919,8 +1935,12 @@ async fn test_all_frontends_no_collision() {
     let r: serde_json::Value = client
         .post(format!("{proxy}/v1/responses"))
         .json(&serde_json::json!({"model": model, "input": "hi"}))
-        .send().await.unwrap()
-        .json().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(r["object"], "response");
     assert_eq!(r["status"], "completed");
 
@@ -1930,8 +1950,12 @@ async fn test_all_frontends_no_collision() {
         .json(&serde_json::json!({
             "model": model, "messages": [{"role":"user","content":"hi"}], "stream": false
         }))
-        .send().await.unwrap()
-        .json().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(r["done"], true);
     assert_eq!(r["message"]["role"], "assistant");
 
@@ -1942,9 +1966,16 @@ async fn test_all_frontends_no_collision() {
         .json(&serde_json::json!({
             "model": model, "messages": [{"role":"user","content":"hi"}], "stream": true
         }))
-        .send().await.unwrap()
-        .text().await.unwrap();
-    assert!(body.contains("chat.completion.chunk"), "openai stream frame: {body}");
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        body.contains("chat.completion.chunk"),
+        "openai stream frame: {body}"
+    );
     assert!(body.contains("[DONE]"));
 
     // Anthropic events
@@ -1955,18 +1986,28 @@ async fn test_all_frontends_no_collision() {
             "model": model, "max_tokens": 100, "stream": true,
             "messages": [{"role":"user","content":"hi"}]
         }))
-        .send().await.unwrap()
-        .text().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
     assert!(body.contains("event: message_start"), "{}", body);
     assert!(body.contains("event: content_block_delta"));
     assert!(body.contains("event: message_stop"));
 
     // Gemini chunks
     let body = client
-        .post(format!("{proxy}/v1beta/models/{model}:streamGenerateContent"))
+        .post(format!(
+            "{proxy}/v1beta/models/{model}:streamGenerateContent"
+        ))
         .json(&serde_json::json!({"contents":[{"role":"user","parts":[{"text":"hi"}]}]}))
-        .send().await.unwrap()
-        .text().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
     assert!(body.contains("\"finishReason\":\"STOP\""), "{}", body);
     assert!(body.contains("usageMetadata"));
 
@@ -1974,8 +2015,12 @@ async fn test_all_frontends_no_collision() {
     let body = client
         .post(format!("{proxy}/v1/responses"))
         .json(&serde_json::json!({"model": model, "input": "hi", "stream": true}))
-        .send().await.unwrap()
-        .text().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
     assert!(body.contains("event: response.created"), "{}", body);
     assert!(body.contains("event: response.output_text.delta"));
     assert!(body.contains("event: response.completed"));
@@ -1986,8 +2031,12 @@ async fn test_all_frontends_no_collision() {
         .json(&serde_json::json!({
             "model": model, "messages": [{"role":"user","content":"hi"}], "stream": true
         }))
-        .send().await.unwrap()
-        .text().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
     assert!(body.contains("\"done\":false"));
     assert!(body.contains("\"done\":true"));
 
@@ -2004,7 +2053,12 @@ async fn test_all_frontends_no_collision() {
                         .post(format!("{proxy}/v1/chat/completions"))
                         .json(&serde_json::json!({"model": model,
                             "messages":[{"role":"user","content":"x"}]}))
-                        .send().await.unwrap().json().await.unwrap();
+                        .send()
+                        .await
+                        .unwrap()
+                        .json()
+                        .await
+                        .unwrap();
                     assert_eq!(r["object"], "chat.completion");
                 }
                 1 => {
@@ -2013,7 +2067,12 @@ async fn test_all_frontends_no_collision() {
                         .header("x-api-key", "k")
                         .json(&serde_json::json!({"model": model, "max_tokens": 10,
                             "messages":[{"role":"user","content":"x"}]}))
-                        .send().await.unwrap().json().await.unwrap();
+                        .send()
+                        .await
+                        .unwrap()
+                        .json()
+                        .await
+                        .unwrap();
                     assert_eq!(r["type"], "message");
                 }
                 2 => {
@@ -2021,14 +2080,24 @@ async fn test_all_frontends_no_collision() {
                         .post(format!("{proxy}/v1beta/models/{model}:generateContent"))
                         .json(&serde_json::json!({"contents":[
                             {"role":"user","parts":[{"text":"x"}]}]}))
-                        .send().await.unwrap().json().await.unwrap();
+                        .send()
+                        .await
+                        .unwrap()
+                        .json()
+                        .await
+                        .unwrap();
                     assert!(r["candidates"][0]["finishReason"].is_string());
                 }
                 3 => {
                     let r: serde_json::Value = client
                         .post(format!("{proxy}/v1/responses"))
                         .json(&serde_json::json!({"model": model, "input": "x"}))
-                        .send().await.unwrap().json().await.unwrap();
+                        .send()
+                        .await
+                        .unwrap()
+                        .json()
+                        .await
+                        .unwrap();
                     assert_eq!(r["object"], "response");
                 }
                 _ => {
@@ -2036,7 +2105,12 @@ async fn test_all_frontends_no_collision() {
                         .post(format!("{proxy}/api/chat"))
                         .json(&serde_json::json!({"model": model,
                             "messages":[{"role":"user","content":"x"}], "stream": false}))
-                        .send().await.unwrap().json().await.unwrap();
+                        .send()
+                        .await
+                        .unwrap()
+                        .json()
+                        .await
+                        .unwrap();
                     assert_eq!(r["done"], true);
                 }
             }
@@ -2049,8 +2123,12 @@ async fn test_all_frontends_no_collision() {
     // /v1/models still intact after everything.
     let r: serde_json::Value = client
         .get(format!("{proxy}/v1/models"))
-        .send().await.unwrap()
-        .json().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert!(!r["data"].as_array().unwrap().is_empty());
 }
 
@@ -2064,10 +2142,17 @@ async fn test_responses_session_chaining() {
     let r1: serde_json::Value = client
         .post(format!("{proxy}/v1/responses"))
         .json(&serde_json::json!({"model": "xiaomi/mimo-v2.5", "input": "hi"}))
-        .send().await.unwrap()
-        .json().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let resp_id = r1["id"].as_str().unwrap().to_string();
-    assert!(resp_id.starts_with("resp_"), "server-assigned id: {resp_id}");
+    assert!(
+        resp_id.starts_with("resp_"),
+        "server-assigned id: {resp_id}"
+    );
 
     // Turn 2: chain via previous_response_id — must be accepted (the mock
     // upstream answers regardless; what matters is no 404 and normal shape).
@@ -2079,8 +2164,12 @@ async fn test_responses_session_chaining() {
             "previous_response_id": resp_id,
             "stream": false,
         }))
-        .send().await.unwrap()
-        .json().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(r2["object"], "response", "chained turn failed: {r2}");
     assert!(r2["id"].as_str().unwrap().starts_with("resp_"));
 
@@ -2092,7 +2181,9 @@ async fn test_responses_session_chaining() {
             "input": "x",
             "previous_response_id": "resp_does_not_exist",
         }))
-        .send().await.unwrap()
+        .send()
+        .await
+        .unwrap()
         .status();
     assert_eq!(status, 404);
 
@@ -2105,9 +2196,20 @@ async fn test_responses_session_chaining() {
             "previous_response_id": r2["id"].as_str().unwrap(),
             "stream": true,
         }))
-        .send().await.unwrap()
-        .text().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
     // Chained streaming turns still get their own fresh resp_* id.
-    assert!(body.contains("event: response.created"), "{}", body.as_str());
-    assert!(body.contains("resp_"), "expected server-assigned id in {body}");
+    assert!(
+        body.contains("event: response.created"),
+        "{}",
+        body.as_str()
+    );
+    assert!(
+        body.contains("resp_"),
+        "expected server-assigned id in {body}"
+    );
 }

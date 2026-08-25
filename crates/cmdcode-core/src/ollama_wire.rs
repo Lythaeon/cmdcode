@@ -176,7 +176,11 @@ impl OllamaStreamRenderer {
     /// Consume one OpenAI SSE payload, returning zero or more NDJSON lines
     /// (each terminated with `\n`).
     pub fn feed(&mut self, payload: &str) -> Vec<String> {
-        let data = payload.trim().strip_prefix("data:").unwrap_or(payload).trim();
+        let data = payload
+            .trim()
+            .strip_prefix("data:")
+            .unwrap_or(payload)
+            .trim();
         if data.is_empty() || data == "[DONE]" || self.finished {
             return Vec::new();
         }
@@ -190,7 +194,10 @@ impl OllamaStreamRenderer {
         };
         let delta = choice.get("delta").cloned().unwrap_or_else(|| json!({}));
 
-        let text = delta.get("content").and_then(|c| c.as_str()).unwrap_or_default();
+        let text = delta
+            .get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or_default();
         if !text.is_empty() {
             out.push(format!(
                 "{}\n",

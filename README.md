@@ -146,9 +146,14 @@ echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-1
 
 ## Features
 
-- **OpenAI-compatible** — `/v1/chat/completions` (stream + non-stream)
-- **Anthropic-compatible** — `/v1/messages` (stream + non-stream): Claude SDKs
-  and Anthropic-protocol harnesses work against any configured provider
+- **Five protocol frontends** — OpenAI `/v1/chat/completions`,
+  Anthropic `/v1/messages`, Gemini `:generateContent`,
+  OpenAI Responses `/v1/responses` (with server-side `previous_response_id`
+  chaining), and Ollama-native `/api/chat` — every one works against every
+  configured upstream
+- **Multi-provider routing** — declarative `providers.json`, hot reload,
+  runtime enable/disable via `cmdcode connect`, per-model routing with
+  default fallback
 - **Google Gemini** — `:generateContent` / `:streamGenerateContent`
 - **OpenAI Responses API** — `/v1/responses` (stateless subset)
 - **Ollama-native** — `/api/chat` + `/api/tags`

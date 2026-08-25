@@ -196,9 +196,7 @@ impl RouterHandle {
         let Some(path) = &current.source_path else {
             return; // env-only setup — nothing to watch
         };
-        let mtime = std::fs::metadata(path)
-            .and_then(|m| m.modified())
-            .ok();
+        let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
         if mtime == current.source_mtime {
             return;
         }
@@ -251,9 +249,7 @@ impl RouterHandle {
 impl ProviderRouter {
     /// Resolve the provider serving `model`, falling back to the default.
     pub fn resolve(&self, model: &str) -> &Arc<dyn Provider> {
-        self.by_model
-            .get(model)
-            .unwrap_or(&self.default)
+        self.by_model.get(model).unwrap_or(&self.default)
     }
 
     /// Build the router from the declarative config, falling back to the
@@ -303,10 +299,14 @@ impl ProviderRouter {
             }
             enabled_seen = true;
             let provider: Arc<dyn Provider> = match entry.kind() {
-                cmdcode_core::provider_config::AdapterKind::OpenAi => Arc::new(openai::OpenAiProvider {
-                    base_url: entry.base_url().unwrap_or_else(|| "http://localhost".into()),
-                    api_key: entry.api_key(),
-                }),
+                cmdcode_core::provider_config::AdapterKind::OpenAi => {
+                    Arc::new(openai::OpenAiProvider {
+                        base_url: entry
+                            .base_url()
+                            .unwrap_or_else(|| "http://localhost".into()),
+                        api_key: entry.api_key(),
+                    })
+                }
                 cmdcode_core::provider_config::AdapterKind::Anthropic => {
                     Arc::new(anthropic::AnthropicProvider {
                         base_url: entry
@@ -323,21 +323,20 @@ impl ProviderRouter {
                         api_key: entry.api_key(),
                     })
                 }
-                cmdcode_core::provider_config::AdapterKind::CommandCode => Arc::new(
-                    commandcode::CommandCodeProvider {
+                cmdcode_core::provider_config::AdapterKind::CommandCode => {
+                    Arc::new(commandcode::CommandCodeProvider {
                         auth: auth.clone(),
                         base_url: entry
                             .base_url()
                             .unwrap_or_else(|| config.upstream_url.clone()),
                         learning: entry.learning,
-                    },
-                ),
+                    })
+                }
             };
             if default.is_none() {
                 default = Some(provider.clone());
             }
-            let display_name =
-                entry.name.clone().unwrap_or_else(|| key.to_string());
+            let display_name = entry.name.clone().unwrap_or_else(|| key.to_string());
             for id in entry.models.keys() {
                 by_model.insert(id.clone(), provider.clone());
                 models.push(serde_json::json!({
@@ -408,9 +407,9 @@ impl ProviderRouter {
                         }
                         cmdcode_core::provider_config::AdapterKind::Gemini => {
                             Arc::new(gemini::GeminiProvider {
-                                base_url: entry
-                                    .base_url()
-                                    .unwrap_or_else(|| "https://generativelanguage.googleapis.com/v1beta".into()),
+                                base_url: entry.base_url().unwrap_or_else(|| {
+                                    "https://generativelanguage.googleapis.com/v1beta".into()
+                                }),
                                 api_key: entry.api_key(),
                             })
                         }

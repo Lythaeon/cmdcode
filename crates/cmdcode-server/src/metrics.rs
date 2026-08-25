@@ -1,5 +1,20 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::SystemTime;
+
+/// Replace any character that is illegal in a Prometheus label value with `_`.
+fn sanitize_label(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '_' | ':' | '.' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
 
 /// Prometheus-style counters and gauges for the proxy.
 ///
@@ -35,6 +50,8 @@ pub struct Metrics {
     pub upstream_timeouts: AtomicU64,
     /// Upstream events skipped as malformed or unknown.
     pub skipped_events: AtomicU64,
+    /// Skipped events broken down by upstream event type.
+    pub skipped_by_type: Mutex<HashMap<String, AtomicU64>>,
     /// Streams that ended with truncated data.
     pub truncated_streams: AtomicU64,
     /// Streams that completed with zero content chunks (empty upstream response).
@@ -68,6 +85,7 @@ impl Metrics {
             client_disconnects: AtomicU64::new(0),
             upstream_timeouts: AtomicU64::new(0),
             skipped_events: AtomicU64::new(0),
+            skipped_by_type: Mutex::new(HashMap::new()),
             truncated_streams: AtomicU64::new(0),
             empty_streams: AtomicU64::new(0),
             active_streams: AtomicI64::new(0),
@@ -141,9 +159,15 @@ impl Metrics {
         self.inc_error();
     }
 
-    /// Increment the skipped events counter.
-    pub fn inc_skipped(&self) {
+    /// Increment the skipped events counter, also recording the event type
+    /// so `/metrics` can surface the breakdown in a single scrape.
+    pub fn inc_skipped(&self, event_type: &str) {
         self.skipped_events.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut g) = self.skipped_by_type.lock() {
+            g.entry(sanitize_label(event_type))
+                .or_insert_with(|| AtomicU64::new(0))
+                .fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// Increment the truncated streams counter.
@@ -292,6 +316,24 @@ impl Metrics {
             self.skipped_events.load(Ordering::Relaxed).to_string(),
             "counter",
         );
+        out.push_str(
+            "# HELP cmdcode_skipped_events_by_type Upstream events skipped, labelled by event type.\n",
+        );
+        out.push_str("# TYPE cmdcode_skipped_events_by_type counter\n");
+        let mut by_type: Vec<(String, u64)> = Vec::new();
+        if let Ok(g) = self.skipped_by_type.lock() {
+            by_type = g
+                .iter()
+                .map(|(k, v)| (k.clone(), v.load(Ordering::Relaxed)))
+                .collect();
+        }
+        for (k, v) in by_type {
+            out.push_str("cmdcode_skipped_events_by_type{type=\"");
+            out.push_str(&k);
+            out.push_str("\"} ");
+            out.push_str(&v.to_string());
+            out.push('\n');
+        }
         line(
             &mut out,
             "Streams ending with a truncated final record.",
@@ -402,6 +444,37 @@ mod tests {
         m.stream_finished();
         assert_eq!(m.active_streams.load(Ordering::Relaxed), 1);
         assert!(m.render().contains("cmdcode_active_streams 1"));
+    }
+
+    #[test]
+    fn test_skipped_by_type_breakdown() {
+        let m = Metrics::new();
+        m.inc_skipped("reasoning-start");
+        m.inc_skipped("reasoning-start");
+        m.inc_skipped("tool-input-start");
+        let text = m.render();
+        assert!(
+            text.contains("cmdcode_skipped_events_total 3"),
+            "total should aggregate all types"
+        );
+        assert!(
+            text.contains("cmdcode_skipped_events_by_type{type=\"reasoning-start\"} 2"),
+            "missing/incorrect reasoning-start breakdown"
+        );
+        assert!(
+            text.contains("cmdcode_skipped_events_by_type{type=\"tool-input-start\"} 1"),
+            "missing/incorrect tool-input-start breakdown"
+        );
+    }
+
+    #[test]
+    fn test_render_no_dangling_by_type_series_when_empty() {
+        let m = Metrics::new();
+        let text = m.render();
+        assert!(
+            !text.contains("cmdcode_skipped_events_by_type \n"),
+            "empty by-type metric must not emit a series line with no value"
+        );
     }
 
     #[test]

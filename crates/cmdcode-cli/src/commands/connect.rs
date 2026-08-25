@@ -41,12 +41,12 @@ pub fn tui() {
         let Some(providers) = cfg.get("providers").and_then(|p| p.as_object()) else {
             continue;
         };
-        println!(
-            "Providers ({}):",
-            providers.len()
-        );
+        println!("Providers ({}):", providers.len());
         for (key, entry) in providers {
-            let kind = entry.get("type").and_then(|t| t.as_str()).unwrap_or("openai");
+            let kind = entry
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or("openai");
             let enabled = entry
                 .get("enabled")
                 .and_then(|e| e.as_bool())
@@ -82,10 +82,9 @@ pub fn tui() {
         ];
 
         let labels: Vec<String> = items.iter().map(|(l, _)| l.clone()).collect();
-        let selection =
-            Select::new("Select an action", labels)
-                .with_help_message("↑/↓ to move · Enter to select · Esc to exit")
-                .prompt();
+        let selection = Select::new("Select an action", labels)
+            .with_help_message("↑/↓ to move · Enter to select · Esc to exit")
+            .prompt();
 
         let Ok(chosen_label) = selection else { return };
         let Some((_, action)) = items.iter().find(|(l, _)| l == &chosen_label) else {
@@ -132,7 +131,9 @@ fn pick_provider(title: &str) -> Option<String> {
 
 /// Toggle flow: pick provider, then choose enable or disable.
 fn toggle_tui() {
-    let Some(name) = pick_provider("Provider to toggle") else { return };
+    let Some(name) = pick_provider("Provider to toggle") else {
+        return;
+    };
 
     // Current state determines the default choice ordering.
     let currently_enabled = load_raw().ok().and_then(|cfg| {
@@ -157,9 +158,15 @@ fn toggle_tui() {
             ("Keep disabled", Action::Cancel),
         ]
     };
-    let title = format!("{name}: currently {}", if is_enabled { "ENABLED" } else { "disabled" });
-    let Ok(choice) = Select::new(&title, actions.iter().map(|(l, _)| l.to_string()).collect())
-        .prompt() else { return };
+    let title = format!(
+        "{name}: currently {}",
+        if is_enabled { "ENABLED" } else { "disabled" }
+    );
+    let Ok(choice) =
+        Select::new(&title, actions.iter().map(|(l, _)| l.to_string()).collect()).prompt()
+    else {
+        return;
+    };
     match actions.iter().find(|(l, _)| l == &choice).map(|(_, a)| a) {
         Some(Action::Enable) => enable(&name),
         Some(Action::Disable) => disable(&name),
@@ -183,13 +190,10 @@ fn load_raw() -> Result<serde_json::Value, String> {
 fn save_raw(value: &serde_json::Value) -> Result<(), String> {
     let path = config_path()?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("create {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
     }
-    let content =
-        serde_json::to_string_pretty(value).map_err(|e| format!("serialize: {e}"))?;
-    std::fs::write(&path, content + "\n")
-        .map_err(|e| format!("write {}: {e}", path.display()))
+    let content = serde_json::to_string_pretty(value).map_err(|e| format!("serialize: {e}"))?;
+    std::fs::write(&path, content + "\n").map_err(|e| format!("write {}: {e}", path.display()))
 }
 
 /// Show every configured provider, its adapter, base URL and model count.
@@ -213,7 +217,10 @@ pub fn list() {
 
     tracing::info!(count = providers.len(), "configured providers");
     for (key, entry) in providers {
-        let kind = entry.get("type").and_then(|t| t.as_str()).unwrap_or("openai");
+        let kind = entry
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("openai");
         let url = entry
             .pointer("/options/baseURL")
             .and_then(|u| u.as_str())
@@ -245,7 +252,8 @@ pub fn list() {
 
 /// Interactive wizard that appends a provider entry to providers.json.
 pub fn add() {
-    let Ok(name) = inquire::Text::new("Provider id (used in configs, e.g. 'openai')").prompt() else {
+    let Ok(name) = inquire::Text::new("Provider id (used in configs, e.g. 'openai')").prompt()
+    else {
         return;
     };
     if name.trim().is_empty() {
@@ -253,13 +261,11 @@ pub fn add() {
         return;
     }
 
-    let adapter = inquire::Select::new(
-        "Adapter type",
-        vec!["openai", "command-code"],
-    )
-    .prompt();
+    let adapter = inquire::Select::new("Adapter type", vec!["openai", "command-code"]).prompt();
 
-    let Ok(adapter) = adapter.map(|a: &str| a.to_string()) else { return };
+    let Ok(adapter) = adapter.map(|a: &str| a.to_string()) else {
+        return;
+    };
 
     let Ok(base_url) = inquire::Text::new(&format!(
         "Base URL{}",
@@ -272,7 +278,9 @@ pub fn add() {
         "command-code" => "https://api.commandcode.ai",
         _ => "",
     })
-    .prompt() else { return };
+    .prompt() else {
+        return;
+    };
 
     let api_key = if adapter == "command-code" {
         // Command Code auth comes from the vault / auth.json.
@@ -285,10 +293,11 @@ pub fn add() {
         }
     };
 
-    let Ok(models_raw) = inquire::Text::new(
-        "Models (comma-separated ids served by this provider)",
-    )
-    .prompt() else { return };
+    let Ok(models_raw) =
+        inquire::Text::new("Models (comma-separated ids served by this provider)").prompt()
+    else {
+        return;
+    };
     let models: Vec<&str> = models_raw
         .split(',')
         .map(str::trim)
@@ -378,7 +387,10 @@ pub fn remove(name: &str) {
 /// with the configured bearer token; for command-code runs a whoami check.
 /// Probe a provider's endpoint connectivity (blocking wrapper).
 pub fn test(name: &str) {
-    match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+    match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
         Ok(rt) => rt.block_on(test_inner(name)),
         Err(e) => tracing::error!(error = %e, "failed to start async runtime"),
     }
@@ -396,7 +408,10 @@ async fn test_inner(name: &str) {
         tracing::warn!(provider = %name, "not found");
         return;
     };
-    let kind = entry.get("type").and_then(|t| t.as_str()).unwrap_or("openai");
+    let kind = entry
+        .get("type")
+        .and_then(|t| t.as_str())
+        .unwrap_or("openai");
     let Some(base) = entry
         .pointer("/options/baseURL")
         .and_then(|u| u.as_str())
