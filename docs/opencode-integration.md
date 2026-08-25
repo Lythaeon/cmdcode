@@ -1,13 +1,16 @@
 # OpenCode Integration
 
-This guide shows how to wire the proxy into [OpenCode](https://opencode.ai)
-so it uses your Command Code subscription as a native model provider.
+This guide shows how to wire [OpenCode](https://opencode.ai) into the
+proxy so every model from every configured upstream provider appears as
+a native OpenCode model.
 
 ## How it works
 
 OpenCode supports any OpenAI-compatible API endpoint via the
 `@ai-sdk/openai-compatible` provider. The proxy runs locally and presents
-itself as one, translating requests to Command Code's API.
+itself as one; each OpenCode model id routes through the provider router
+to whichever upstream declares it (Command Code, OpenAI-compat, native
+Anthropic or Gemini).
 
 ```
 OpenCode ──> localhost:18080/v1/chat/completions ──> Command Code API

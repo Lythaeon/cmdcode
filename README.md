@@ -1,24 +1,30 @@
 # cmdcode
 
-OpenAI-compatible proxy in front of Command Code's HTTP API. Use your
-Command Code subscription with **any** client supporting OpenAI Chat
-Completions - no vendor lock-in.
+A local, multi-provider LLM gateway with taste injection. Speak five
+protocols in, route to any number of upstream providers out — Command
+Code, OpenAI-compatible endpoints, native Anthropic and native Gemini —
+with hot-reloadable config and no vendor lock-in.
 
 ## What it does
 
 ```
-┌──────────────────┐       ┌───────────────┐       ┌─────────────────────────┐
-│  OpenCode        │ POST  │  proxy        │ POST  │  Command Code API       │
-│  LiteLLM         │ ────> │  :18080       │ ────> │  /alpha/generate        │
-│  curl / any SDK  │ <──── │  (local)      │ <──── │  (NDJSON)               │
-│                  │  SSE  │               │ NDJSON│                         │
-└──────────────────┘       └───────────────┘       └─────────────────────────┘
+                five protocols in                     upstream adapters
+┌─────────────────────────────────┐   ┌──────────────────────────────────┐
+│ /v1/chat/completions  (OpenAI)  │   │ command-code  (CLI fingerprint)  │
+│ /v1/messages          (Anthropic)│   │ openai        (any compatible)   │
+│ …:generateContent     (Gemini)  │ ─>│ anthropic     (native Messages)  │
+│ /v1/responses         (Responses)│  │ gemini        (native generate)  │
+│ /api/chat, /api/tags  (Ollama)  │   └────────────┬─────────────────────┘
+└─────────────────────────────────┘                │
+                       taste injection · rate limiting · session store
+                                                   ▼
+                                    providers.json — any mix, hot reload
 ```
 
-The proxy translates the **OpenAI `/v1/chat/completions`** protocol to
-Command Code's custom wire format, preserving the exact API fingerprint
-(headers, body structure, auth) so the upstream cannot distinguish proxy
-traffic from the official `cmd` CLI.
+Providers are declared in `~/.cmdcode/providers.json`, mirroring opencode's
+provider map. Models route to the provider that declares them; undeclared
+models fall back to the first enabled entry. Edits apply on the next
+request — no restart.
 
 ## Quick start
 

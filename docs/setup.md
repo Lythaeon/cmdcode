@@ -3,8 +3,10 @@
 ## Prerequisites
 
 - Rust 1.75+ (with cargo)
-- `command-code` CLI installed and authenticated (`command-code login`)
-- `~/.commandcode/auth.json` exists with a valid API key
+- A configured upstream provider — either a Command Code account
+  (`cmdcode auth`) or entries in `~/.cmdcode/providers.json`
+  (`cmdcode connect add`). No external CLI is required; the model catalog
+  is bundled.
 
 ## Quick start
 
