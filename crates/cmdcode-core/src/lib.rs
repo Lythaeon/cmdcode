@@ -21,6 +21,9 @@ pub mod error;
 pub mod model_catalog;
 
 /// Google Gemini wire protocol adapter.
+/// Dynamic client-fingerprint detection for upstream adapters.
+pub mod fingerprint;
+
 pub mod gemini_wire;
 
 /// OpenAI Responses API (`/v1/responses`) adapter.

@@ -67,12 +67,21 @@ impl Provider for OpenAiProvider {
         _auth: &AuthManager,
         _cwd: &str,
     ) -> Result<Vec<(String, String)>, UpstreamError> {
+        // Mirror the Codex CLI fingerprint: codex_cli_rs UA, originator and
+        // session_id headers (version detected from an installed `codex`
+        // binary when present).
         let mut headers = vec![
             ("Content-Type".to_string(), "application/json".to_string()),
             (
                 "Authorization".to_string(),
                 format!("Bearer {}", self.api_key.as_deref().unwrap_or("not-needed")),
             ),
+            (
+                "User-Agent".to_string(),
+                cmdcode_core::fingerprint::codex_user_agent(),
+            ),
+            ("originator".to_string(), "codex_cli_rs".to_string()),
+            ("session_id".to_string(), uuid::Uuid::new_v4().to_string()),
         ];
         headers.shrink_to_fit();
         Ok(headers)
@@ -373,5 +382,27 @@ mod tests {
             }
             _ => panic!("expected EmitAndStop"),
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod fp_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_fingerprint_headers_present() {
+        let p = OpenAiProvider {
+            base_url: "http://127.0.0.1".into(),
+            api_key: Some("sk-test".into()),
+        };
+        let auth = cmdcode_core::auth::AuthManager::new(
+            std::path::PathBuf::from("/tmp"), 60,
+        );
+        let h = p.headers(&auth, "/tmp").await.unwrap();
+        let map: std::collections::HashMap<_, _> = h.into_iter().collect();
+        assert!(map["User-Agent"].contains("codex_cli_rs"), "UA missing: {:?}", map);
+        assert_eq!(map["originator"], "codex_cli_rs");
+        assert!(map.contains_key("session_id"));
     }
 }

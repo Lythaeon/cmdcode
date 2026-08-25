@@ -309,10 +309,17 @@ impl Provider for AnthropicProvider {
         _auth: &AuthManager,
         _cwd: &str,
     ) -> Result<Vec<(String, String)>, UpstreamError> {
+        // Mirror the Claude Code CLI fingerprint: UA + x-app, with version
+        // detected from an installed `claude` binary when present.
         Ok(vec![
             ("Content-Type".into(), "application/json".into()),
             ("x-api-key".into(), self.api_key.clone().unwrap_or_default()),
             ("anthropic-version".into(), ANTHROPIC_VERSION.into()),
+            (
+                "User-Agent".into(),
+                cmdcode_core::fingerprint::claude_user_agent(),
+            ),
+            ("x-app".into(), "cli".into()),
         ])
     }
 

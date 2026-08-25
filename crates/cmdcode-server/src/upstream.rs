@@ -118,6 +118,12 @@ impl UpstreamClient {
         let provider = router.resolve(model.as_str()).clone();
 
         let mut headers = provider.headers(&self.auth, &cwd).await?;
+        tracing::info!(
+            adapter = provider.name(),
+            header_count = headers.len(),
+            header_names = ?headers.iter().map(|(k,_)| k.as_str()).collect::<Vec<_>>(),
+            "upstream request headers"
+        );
 
         let upstream_body = provider.build_body(&crate::providers::RequestContext {
             model,

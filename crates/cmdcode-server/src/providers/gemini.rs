@@ -136,11 +136,17 @@ impl Provider for GeminiProvider {
         _auth: &AuthManager,
         _cwd: &str,
     ) -> Result<Vec<(String, String)>, UpstreamError> {
+        // Mirror the Gemini CLI user-agent (version detected from an
+        // installed `gemini` binary when present).
         Ok(vec![
             ("Content-Type".into(), "application/json".into()),
             (
                 "x-goog-api-key".into(),
                 self.api_key.clone().unwrap_or_default(),
+            ),
+            (
+                "User-Agent".into(),
+                cmdcode_core::fingerprint::gemini_user_agent(),
             ),
         ])
     }
