@@ -90,7 +90,9 @@ curl http://127.0.0.1:18080/v1/chat/completions \
 | `cmdcode models` | List available models |
 | `cmdcode config` | Show current configuration |
 | `cmdcode test` | Send a test request to verify proxy |
-| `cmdcode connect` | Interactive TUI: manage upstream providers (add/enable/disable/remove/test) |
+| `cmdcode connect` | Interactive TUI: manage upstream providers (sign in, enable/disable, add/remove, test) |
+| `cmdcode connect login <id> [--key K]` | Store the provider's API key (masked prompt; validated; chmod 0600) |
+| `cmdcode connect logout <id>` | Remove the stored key |
 | `cmdcode connect add` / `remove <id>` / `enable <id>` / `disable <id>` / `test <id>` / `list` | Non-interactive provider management |
 | `cmdcode setup` | Configure client harnesses |
 
@@ -230,7 +232,7 @@ Declared in `~/.cmdcode/providers.json` (override with
 |-------|-------------|
 | `type` | Adapter: `command-code`, `openai`, `anthropic`, or `gemini` |
 | `options.baseURL` | Upstream base URL (adapter-specific default if omitted) |
-| `options.apiKey` | API key — `{env:VAR}` interpolation supported |
+| `options.apiKey` | Optional inline key (`{env:VAR}` interpolation). Prefer omitting it and using `connect login`, which stores keys in `~/.cmdcode/secrets.json` (chmod 0600) |
 | `models` | Model ids this provider serves (routes + `/v1/models` listing) |
 | `learning` | Serve taste-learning requests from the MCP server |
 | `enabled` | `false` removes it from routing without deleting the entry |
@@ -238,6 +240,22 @@ Declared in `~/.cmdcode/providers.json` (override with
 The first enabled entry is the fallback for undeclared models. Edits apply
 on the next request (hot reload); a broken config file keeps the last-good
 router. Manage entries with `cmdcode connect` instead of hand-editing.
+
+### Keys & sign-in
+
+`command-code` uses the account vault (`cmdcode auth`). Every other
+provider takes an API key:
+
+```bash
+cmdcode connect login claude-direct          # masked prompt, validates against /v1/models
+cmdcode connect login openai --key sk-...    # non-interactive
+cmdcode connect list                         # shows key=set/missing per provider
+cmdcode connect logout claude-direct         # remove stored key
+```
+
+Keys are stored per provider id in `~/.cmdcode/secrets.json` (0600), so
+`providers.json` itself stays shareable. Resolution order: inline
+`options.apiKey` → secret store → none.
 
 ## Endpoints
 

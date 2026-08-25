@@ -9,6 +9,8 @@
 //!   is appended — include `/v1` in the base if the provider needs it)
 //! - `COMMAND_CODE_UPSTREAM_API_KEY=<bearer token>`
 
+use serde_json::{json, Value};
+
 use super::{Provider, RequestContext};
 use crate::upstream::{LineOutcome, StreamState};
 use cmdcode_core::auth::AuthManager;
@@ -83,7 +85,7 @@ impl Provider for OpenAiProvider {
         let mut body = serde_json::json!({
             "model": ctx.model.as_str(),
             "messages": b.messages,
-            "stream": true,
+            "stream": b.stream.unwrap_or(false),
         });
         if let Some(t) = &b.tools {
             body["tools"] = serde_json::to_value(t).unwrap_or(serde_json::Value::Null);
@@ -125,10 +127,24 @@ impl Provider for OpenAiProvider {
         text: &str,
         _model: &str,
     ) -> Result<serde_json::Value, UpstreamError> {
-        // Already OpenAI format — validate JSON and return.
-        serde_json::from_str(text).map_err(|e| UpstreamError::HttpError {
+        // Well-behaved upstreams return a plain JSON completion.
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(text) {
+            if v.get("choices").is_some() {
+                return Ok(v);
+            }
+        }
+        // Robustness: some endpoints reply with SSE even when stream=false
+        // (or ignore our stream flag). Reassemble an OpenAI completion from
+        // the streamed frames.
+        if let Some(v) = assemble_sse_completion(text, _model) {
+            return Ok(v);
+        }
+        Err(UpstreamError::HttpError {
             status: 502,
-            body: format!("invalid upstream response: {e}"),
+            body: format!(
+                "invalid upstream response: {}",
+                text.chars().take(200).collect::<String>()
+            ),
         })
     }
 
@@ -183,6 +199,105 @@ pub fn openai_translate_line<'a>(line: &str, state: &mut StreamState<'a>) -> Lin
         );
         LineOutcome::Skip
     }
+}
+
+/// Reconstruct a chat.completion object from an SSE body of OpenAI chunks.
+fn assemble_sse_completion(text: &str, model: &str) -> Option<Value> {
+    let mut content = String::new();
+    let mut reasoning = String::new();
+    let mut tool_calls: Vec<Value> = Vec::new();
+    let mut finish_reason = Value::Null;
+    let mut usage = json!({});
+    let mut id = String::new();
+    let mut saw_any = false;
+
+    for line in text.lines() {
+        let line = line.trim();
+        let Some(data) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        let Ok(chunk) = serde_json::from_str::<Value>(data) else {
+            continue;
+        };
+        saw_any = true;
+        if !id.is_empty() || chunk.get("id").is_some() {
+            if let Some(cid) = chunk.get("id").and_then(|v| v.as_str()) {
+                if id.is_empty() {
+                    id = cid.to_string();
+                }
+            }
+        }
+        if let Some(u) = chunk.get("usage").filter(|u| !u.is_null()) {
+            usage = u.clone();
+        }
+        let Some(choice) = chunk.pointer("/choices/0") else {
+            continue;
+        };
+        if let Some(fr) = choice.get("finish_reason") {
+            if !fr.is_null() {
+                finish_reason = fr.clone();
+            }
+        }
+        if let Some(delta) = choice.get("delta") {
+            if let Some(t) = delta.get("content").and_then(|c| c.as_str()) {
+                content.push_str(t);
+            }
+            if let Some(r) = delta.get("reasoning_content").and_then(|c| c.as_str()) {
+                reasoning.push_str(r);
+            }
+            if let Some(calls) = delta.get("tool_calls").and_then(|c| c.as_array()) {
+                for tc in calls {
+                    let idx = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                    if tool_calls.len() <= idx {
+                        tool_calls.resize_with(idx + 1, || {
+                            json!({"id": "", "type": "function",
+                                   "function": {"name": "", "arguments": ""}})
+                        });
+                    }
+                    let slot = &mut tool_calls[idx];
+                    if let Some(tid) = tc.get("id").and_then(|v| v.as_str()) {
+                        if !tid.is_empty() {
+                            slot["id"] = json!(tid);
+                        }
+                    }
+                    if let Some(name) = tc.pointer("/function/name").and_then(|v| v.as_str()) {
+                        if !name.is_empty() {
+                            slot["function"]["name"] = json!(name);
+                        }
+                    }
+                    if let Some(args) = tc.pointer("/function/arguments").and_then(|v| v.as_str()) {
+                        let existing = slot["function"]["arguments"].as_str().unwrap_or("");
+                        slot["function"]["arguments"] = json!(format!("{existing}{args}"));
+                    }
+                }
+            }
+        }
+    }
+
+    if !saw_any {
+        return None;
+    }
+    let message = json!({
+        "role": "assistant",
+        "content": content,
+        "reasoning_content": if reasoning.is_empty() { Value::Null } else { json!(reasoning) },
+        "tool_calls": if tool_calls.is_empty() { Value::Null } else { json!(tool_calls) },
+    });
+    Some(json!({
+        "id": if id.is_empty() { json!(format!("chatcmpl-{}", std::process::id())) } else { json!(id) },
+        "object": "chat.completion",
+        "created": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        "model": model,
+        "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
+        "usage": usage,
+    }))
 }
 
 #[cfg(test)]

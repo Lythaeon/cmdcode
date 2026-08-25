@@ -162,6 +162,11 @@ impl ProvidersConfig {
 }
 
 /// Interpolate `{env:VAR}` references from the process environment.
+pub fn interpolate_env_pub(value: &str) -> String {
+    interpolate_env(value)
+}
+
+/// Interpolate `{env:VAR}` references from the process environment.
 fn interpolate_env(value: &str) -> String {
     if !value.contains("{env:") {
         return value.to_string();

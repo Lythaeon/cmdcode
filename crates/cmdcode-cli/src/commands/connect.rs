@@ -67,6 +67,8 @@ pub fn tui() {
 
         enum Menu {
             Toggle,
+            Login,
+            Logout,
             Add,
             Remove,
             Test,
@@ -74,6 +76,11 @@ pub fn tui() {
         }
 
         let items = [
+            (
+                "Sign in a provider (store API key)".to_string(),
+                Menu::Login,
+            ),
+            ("Remove stored key".to_string(), Menu::Logout),
             ("Enable/disable a provider".to_string(), Menu::Toggle),
             ("Add a new provider".to_string(), Menu::Add),
             ("Remove a provider".to_string(), Menu::Remove),
@@ -92,6 +99,14 @@ pub fn tui() {
         };
         match action {
             Menu::Toggle => toggle_tui(),
+            Menu::Login => match pick_provider("Provider to sign in") {
+                Some(name) => login(&name, None),
+                None => continue,
+            },
+            Menu::Logout => match pick_provider("Provider to log out") {
+                Some(name) => logout(&name),
+                None => continue,
+            },
             Menu::Add => add(),
             Menu::Remove => match pick_provider("Provider to remove") {
                 Some(name) => remove(&name),
@@ -238,6 +253,10 @@ pub fn list() {
             .get("enabled")
             .and_then(|e| e.as_bool())
             .unwrap_or(true);
+        let has_key = cmdcode_core::provider_secrets::ProviderSecretStore::default()
+            .get(key)
+            .is_some()
+            || entry.pointer("/options/apiKey").is_some();
         tracing::info!(
             provider = %key,
             kind,
@@ -245,6 +264,7 @@ pub fn list() {
             models = model_count,
             learning,
             enabled,
+            key = if has_key { "set" } else { "missing" },
             "(declared)"
         );
     }
@@ -438,10 +458,13 @@ async fn test_inner(name: &str) {
     };
 
     let mut req = client.get(&url).header("User-Agent", "cli");
-    if let Some(key) = entry.pointer("/options/apiKey").and_then(|k| k.as_str()) {
-        let interpolated = interpolate_env_str(key);
-        req = req.bearer_auth(interpolated);
-    } else if kind == "command-code" {
+    let opt_key = entry.pointer("/options/apiKey").and_then(|k| k.as_str());
+    let stored_key = cmdcode_core::provider_secrets::ProviderSecretStore::default().get(name);
+    let effective_key = opt_key
+        .map(interpolate_env_str)
+        .or(stored_key)
+        .filter(|k| !k.is_empty());
+    if kind == "command-code" && effective_key.is_none() {
         // Fall back to vault/auth.json credentials.
         let store = cmdcode_core::accounts::AccountStore::default();
         let key = store
@@ -456,6 +479,20 @@ async fn test_inner(name: &str) {
             });
         if let Some(key) = key {
             req = req.bearer_auth(key);
+        }
+    } else if let Some(key) = effective_key {
+        match kind {
+            "anthropic" => {
+                req = req
+                    .header("x-api-key", &key)
+                    .header("anthropic-version", "2023-06-01");
+            }
+            "gemini" => {
+                req = req.header("x-goog-api-key", &key);
+            }
+            _ => {
+                req = req.bearer_auth(key);
+            }
         }
     }
 
@@ -543,4 +580,131 @@ pub fn enable(name: &str) {
 /// `cmdcode connect disable <name>`
 pub fn disable(name: &str) {
     set_enabled(name, false);
+}
+
+/// `cmdcode connect login <name>` — securely store the API key for a
+/// provider in `~/.cmdcode/secrets.json` (0600), optionally validating it
+/// against the upstream first.
+pub fn login(name: &str, key_arg: Option<&str>) {
+    let cfg = match load_raw() {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to load providers config");
+            return;
+        }
+    };
+    let Some(entry) = cfg.pointer(&format!("/providers/{name}")) else {
+        tracing::warn!(provider = %name, "not found — add it first with connect add");
+        return;
+    };
+    let kind = entry
+        .get("type")
+        .and_then(|t| t.as_str())
+        .unwrap_or("openai");
+    if kind == "command-code" {
+        tracing::info!("command-code uses the account vault — run 'cmdcode auth' instead");
+        return;
+    }
+
+    let key = match key_arg {
+        Some(k) if !k.trim().is_empty() => k.to_string(),
+        Some(_) => {
+            tracing::error!("key must not be empty");
+            return;
+        }
+        None => match inquire::Password::new(&format!("API key for {name}"))
+            .with_help_message("Input is masked; press Esc to cancel")
+            .prompt()
+        {
+            Ok(k) if !k.trim().is_empty() => k,
+            Ok(_) => {
+                tracing::error!("key must not be empty");
+                return;
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "cancelled");
+                return;
+            }
+        },
+    };
+
+    // Validate before saving when the endpoint exposes a probe.
+    let base = entry
+        .pointer("/options/baseURL")
+        .and_then(|u| u.as_str())
+        .map(|s| s.trim_end_matches('/').to_string());
+    if let Some(base) = base {
+        let url = match kind {
+            "anthropic" => format!("{base}/v1/models"),
+            _ => format!("{base}/models"),
+        };
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!(error = %e, "failed to start async runtime");
+                return;
+            }
+        };
+        let valid = rt.block_on(async {
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+                .ok()?;
+            let mut req = client.get(&url);
+            match kind {
+                "anthropic" => {
+                    req = req
+                        .header("x-api-key", key.trim())
+                        .header("anthropic-version", "2023-06-01");
+                }
+                "gemini" => {
+                    req = req.header("x-goog-api-key", key.trim());
+                }
+                _ => {
+                    req = req.bearer_auth(key.trim());
+                }
+            }
+            let resp = req.send().await.ok()?;
+            Some(resp.status().is_success())
+        });
+        match valid {
+            Some(true) => tracing::info!(provider = %name, "key validated"),
+            Some(false) => {
+                // Key may still be valid for chat-only endpoints; warn but save.
+                tracing::warn!(
+                    provider = %name,
+                    "key did not validate against the models endpoint; saving anyway"
+                );
+            }
+            None => {
+                tracing::warn!(provider = %name, "could not reach upstream; saving anyway");
+            }
+        }
+    }
+
+    let store = cmdcode_core::provider_secrets::ProviderSecretStore::default();
+    if let Err(e) = store.set(name, key.trim()) {
+        tracing::error!(error = %e, "failed to save key");
+        return;
+    }
+    tracing::info!(
+        provider = %name,
+        path = %cmdcode_core::provider_secrets::ProviderSecretStore::default_path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default(),
+        "key stored (chmod 0600)"
+    );
+}
+
+/// `cmdcode connect logout <name>` — remove the stored key.
+pub fn logout(name: &str) {
+    let store = cmdcode_core::provider_secrets::ProviderSecretStore::default();
+    match store.remove(name) {
+        Ok(true) => tracing::info!(provider = %name, "stored key removed"),
+        Ok(false) => tracing::warn!(provider = %name, "no stored key found"),
+        Err(e) => tracing::error!(error = %e, "failed to remove key"),
+    }
 }

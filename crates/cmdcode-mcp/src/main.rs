@@ -105,13 +105,15 @@ fn resolve_learning_target() -> LearningTarget {
     if let Some(cfg) = loaded {
         // Explicit learning flag wins, then a command-code entry, then any.
         let pick = |pred: &dyn Fn(&cmdcode_core::provider_config::ProviderEntry) -> bool| {
-            cfg.entries().find(|(_, e)| pred(e)).map(|(_, e)| e)
+            cfg.entries()
+                .find(|(_, e)| pred(e))
+                .map(|(id, e)| (id.clone(), e))
         };
         let chosen = pick(&|e| e.learning)
             .or_else(|| pick(&|e| e.kind() == AdapterKind::CommandCode))
             .or_else(|| pick(&|_| true));
 
-        if let Some(entry) = chosen {
+        if let Some((entry_id, entry)) = chosen {
             let model = entry
                 .models
                 .keys()
@@ -137,7 +139,10 @@ fn resolve_learning_target() -> LearningTarget {
                             .unwrap_or_else(upstream_url)
                             .trim_end_matches('/')
                     ),
-                    api_key: entry.api_key(),
+                    api_key: cmdcode_core::provider_secrets::resolve_api_key(
+                        &entry_id,
+                        entry.options.api_key.as_deref(),
+                    ),
                     model,
                 },
                 // Native Anthropic/Gemini upstreams speak proprietary wire
