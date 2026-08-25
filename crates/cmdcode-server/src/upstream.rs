@@ -682,6 +682,14 @@ pub fn translate_line(line: &str, state: &mut StreamState) -> LineOutcome {
             })
         }
         "finish" => {
+            // The upstream emits duplicate `finish` events on multi-step
+            // (tool) turns. A second terminal chunk with finish_reason +
+            // usage fails the client's streaming validator
+            // (AI_InvalidResponseDataError), so emit at most one.
+            if state.finish_seen {
+                state.skipped += 1;
+                return LineOutcome::Skip;
+            }
             state.finish_seen = true;
             let raw = evt
                 .raw_finish_reason
@@ -826,6 +834,13 @@ pub fn translate_line(line: &str, state: &mut StreamState) -> LineOutcome {
             // step (`stop` / `length`) closes the OpenAI stream.
             match raw {
                 "stop" | "endTurn" | "length" | "max_tokens" => {
+                    // Dedupe: a terminal chunk already went out (e.g. a
+                    // plain `finish` event preceded this one). A second
+                    // terminal chunk breaks client streaming validators.
+                    if state.finish_seen {
+                        state.skipped += 1;
+                        return LineOutcome::Skip;
+                    }
                     let fr = match raw {
                         "length" | "max_tokens" => "length",
                         _ => "stop",

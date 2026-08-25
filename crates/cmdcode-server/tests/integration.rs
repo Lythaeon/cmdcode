@@ -482,9 +482,39 @@ async fn test_chaos_duplicate_finish_events() {
         ..MockUpstream::normal()
     };
     let addr = mock.start().await;
-    let (status, _) =
-        proxy_request(addr, "/alpha/generate", "POST", Some(r#"{"test":true}"#)).await;
-    assert!(status == 200 || status == 502);
+    // Drive translate through a live proxy so the translated SSE body can
+    // be inspected for duplicate terminal chunks.
+    let proxy = start_proxy(addr, 0, 30).await;
+    let client = reqwest::Client::new();
+    let body = client
+        .post(format!("{proxy}/v1/chat/completions"))
+        .json(&serde_json::json!({
+            "model": "xiaomi/mimo-v2.5", "stream": true,
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    // Exactly ONE terminal chunk (finish_reason set + usage) may reach the
+    // client even when the upstream sends duplicate finish events.
+    let terminal_chunks = body
+        .lines()
+        .filter(|l| l.starts_with("data: ") && !l.contains("[DONE]"))
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l[6..].trim()).ok())
+        .filter(|v| {
+            v.pointer("/choices/0/finish_reason")
+                .map(|f| !f.is_null())
+                .unwrap_or(false)
+        })
+        .count();
+    assert_eq!(
+        terminal_chunks, 1,
+        "duplicate terminal chunks reached the client: {body}"
+    );
 }
 
 #[tokio::test]
