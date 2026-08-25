@@ -68,11 +68,7 @@ pub fn claude_cli_version() -> String {
 
 /// Codex CLI version (`codex --version` → "codex-cli 0.144.6").
 pub fn codex_cli_version() -> String {
-    cached_version(
-        "codex",
-        &["codex", "--version"],
-        "0.144.6",
-    )
+    cached_version("codex", &["codex", "--version"], "0.144.6")
 }
 
 /// Gemini CLI version (`gemini --version` → "0.46.0").
@@ -83,10 +79,7 @@ pub fn gemini_cli_version() -> String {
 /// Claude Code user-agent:
 /// `claude-cli/{version} (external, cli)`
 pub fn claude_user_agent() -> String {
-    format!(
-        "claude-cli/{} (external, cli)",
-        claude_cli_version()
-    )
+    format!("claude-cli/{} (external, cli)", claude_cli_version())
 }
 
 /// Codex user-agent:
@@ -117,7 +110,10 @@ mod tests {
             first_version("2.1.215 (Claude Code)").as_deref(),
             Some("2.1.215")
         );
-        assert_eq!(first_version("codex-cli 0.144.6").as_deref(), Some("0.144.6"));
+        assert_eq!(
+            first_version("codex-cli 0.144.6").as_deref(),
+            Some("0.144.6")
+        );
         assert_eq!(first_version("0.46.0").as_deref(), Some("0.46.0"));
         assert_eq!(first_version("no version here"), None);
     }

@@ -396,12 +396,14 @@ mod fp_tests {
             base_url: "http://127.0.0.1".into(),
             api_key: Some("sk-test".into()),
         };
-        let auth = cmdcode_core::auth::AuthManager::new(
-            std::path::PathBuf::from("/tmp"), 60,
-        );
+        let auth = cmdcode_core::auth::AuthManager::new(std::path::PathBuf::from("/tmp"), 60);
         let h = p.headers(&auth, "/tmp").await.unwrap();
         let map: std::collections::HashMap<_, _> = h.into_iter().collect();
-        assert!(map["User-Agent"].contains("codex_cli_rs"), "UA missing: {:?}", map);
+        assert!(
+            map["User-Agent"].contains("codex_cli_rs"),
+            "UA missing: {:?}",
+            map
+        );
         assert_eq!(map["originator"], "codex_cli_rs");
         assert!(map.contains_key("session_id"));
     }
