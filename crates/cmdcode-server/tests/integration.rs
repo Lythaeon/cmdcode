@@ -1705,7 +1705,9 @@ async fn test_semaphore_held_during_stream() {
     // semaphore permit is dropped immediately (the old bug), both streams run
     // concurrently and finishes[1] - finishes[0] ≈ 0ms, failing this check.
     let gap = finishes[1] - finishes[0];
-    let min_expected_gap = 500.0; // conservative lower bound (2 gaps × 300ms)
+    // Nominal gap is ~600ms (2 chunk gaps × 300ms); 350ms still proves
+    // serialization while tolerating scheduler jitter on 2-core CI runners.
+    let min_expected_gap = 350.0;
     assert!(
         gap >= min_expected_gap,
         "semaphore permit was not held during streaming: \
@@ -1768,9 +1770,12 @@ async fn test_max_concurrent_serializes_streams() {
     // With max_concurrent=1 the two streams MUST be serialized, so the second
     // cannot finish before the first's stream duration + permit release.
     assert_eq!(finishes.len(), 2, "expected both streams to complete");
+    // Nominal gap is the mock's 400ms chunk_gap; allow scheduler jitter on
+    // 2-core CI runners (observed 399.89ms). Without serialization the gap
+    // is ~0ms, so 300ms still proves the semaphore holds.
     assert!(
-        finishes[1] - finishes[0] >= 400.0,
-        "streams with max_concurrent=1 must be serialized (gap {}ms < 400ms)",
+        finishes[1] - finishes[0] >= 300.0,
+        "streams with max_concurrent=1 must be serialized (gap {}ms < 300ms)",
         finishes[1] - finishes[0]
     );
 }

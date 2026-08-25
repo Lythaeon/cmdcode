@@ -155,10 +155,30 @@ jobs:
             sleep 2
           done
 
+      - name: Extract release notes from CHANGELOG
+        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true')
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          # Slice the section for this version out of Keep-a-Changelog format:
+          # everything between '## [version]' and the next '## ['.
+          awk -v ver="[$version]" '
+            $0 ~ "^## \\[" ver "\\]" {found=1; next}
+            found && /^## \[/ {exit}
+            found {print}
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "No CHANGELOG section found for ${version}" >&2
+            echo "See CHANGELOG.md for details." > RELEASE_NOTES.md
+          fi
+
       - name: Publish GitHub release assets
         if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true')
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
+          body_path: RELEASE_NOTES.md
+          generate_release_notes: true
           files: |
             dist/*.tar.gz
             dist/*.sha256
