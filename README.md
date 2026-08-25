@@ -84,6 +84,8 @@ curl http://127.0.0.1:18080/v1/chat/completions \
 | `cmdcode models` | List available models |
 | `cmdcode config` | Show current configuration |
 | `cmdcode test` | Send a test request to verify proxy |
+| `cmdcode connect` | Interactive TUI: manage upstream providers (add/enable/disable/remove/test) |
+| `cmdcode connect add` / `remove <id>` / `enable <id>` / `disable <id>` / `test <id>` / `list` | Non-interactive provider management |
 | `cmdcode setup` | Configure client harnesses |
 
 ## Multi-account & auto-rotate
@@ -106,9 +108,9 @@ cmdcode auth                    # select "Auto-rotate: ON" in the TUI
 
 The proxy reads the active credential from `~/.cmdcode/accounts.json` on
 each TTL refresh — switching accounts takes effect within seconds without
-a restart. When auto-rotate is enabled and the upstream returns 401/403/429
-(credit exhausted / rate limit), the proxy rotates to the next account and
-retries the request.
+a restart. When auto-rotate is enabled and the upstream rejects the
+account (401/403/429, **or** a 400 "insufficient credits" response),
+the proxy rotates to the next account and retries the request.
 
 ## Taste MCP Server
 
@@ -130,10 +132,15 @@ Add to your opencode config (`~/.config/opencode/opencode.json`):
 }
 ```
 
-The server reads `~/.commandcode/taste/taste.md` and calls the upstream API
-(free — no credit cost) to analyze instructions. Results are written back
-to the same taste files. Agents call the `taste` tool the same way they
-would in command-code.
+The server reads taste files from `~/.commandcode/taste/` and sends learning
+requests to whichever upstream is configured for it: by default the
+Command Code `/alpha/generate` endpoint (**free — no credit cost**); if your
+`providers.json` flags an entry with `"learning": true`, that provider is
+used instead (OpenAI-compatible chat completions). Results are written back
+to the same taste files.
+
+The MCP binary also reads `CMDCODE_PROVIDERS_CONFIG` to point at an
+alternative providers config.
 
 **Usage:**
 ```bash
@@ -146,19 +153,25 @@ echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-1
 
 ## Features
 
+- **Multi-provider upstreams** — four adapter types: `command-code` (CLI
+  fingerprint, vault auth + rotation), `openai` (any compatible endpoint),
+  `anthropic` (native Messages API), `gemini` (native generateContent)
 - **Five protocol frontends** — OpenAI `/v1/chat/completions`,
-  Anthropic `/v1/messages`, Gemini `:generateContent`,
-  OpenAI Responses `/v1/responses` (with server-side `previous_response_id`
-  chaining), and Ollama-native `/api/chat` — every one works against every
-  configured upstream
-- **Multi-provider routing** — declarative `providers.json`, hot reload,
-  runtime enable/disable via `cmdcode connect`, per-model routing with
-  default fallback
-- **Google Gemini** — `:generateContent` / `:streamGenerateContent`
-- **OpenAI Responses API** — `/v1/responses` (stateless subset)
-- **Ollama-native** — `/api/chat` + `/api/tags`
-- **Streaming** — full SSE translation (text, reasoning, tool calls)
-- **Tool calls** — OpenAI function calling ↔ Command Code tool-call format
+  Anthropic `/v1/messages`, Gemini `:generateContent[:stream]`,
+  OpenAI Responses `/v1/responses`, Ollama-native `/api/chat` — every
+  frontend works against every configured upstream
+- **Responses session store** — server-side `previous_response_id` chaining
+  with TTL + entry cap; entries stored only after confirmed completion
+- **Hot reload** — provider edits apply on the next request; broken config
+  files retain the last-good router
+- **Runtime enable/disable** — `"enabled": false` per provider; toggled via
+  CLI or TUI; all-disabled yields a clean 503
+- **Terminal-chunk dedup** — duplicate upstream terminal events never reach
+  the client (streaming validators reject them)
+- **Streaming** — full SSE/NDJSON translation: text, reasoning/thinking,
+  tool-call deltas across every frontend/upstream pair
+- **Tool calls** — function calling translated across all protocol
+  combinations (nested ↔ flat schemas, tool_result ↔ tool role)
 - **Multi-account auth** — vault at `~/.cmdcode/accounts.json` with TUI
   management, auto-rotate on credit limits, no proxy restart needed
 - **Rust + Pingora** — production-grade, sub-millisecond overhead
@@ -180,7 +193,10 @@ echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-1
 |---------|---------|-------------|
 | `COMMAND_CODE_PROXY_PORT` | `18080` | Listen port |
 | `COMMAND_CODE_PROXY_HOST` | `127.0.0.1` | Bind address |
-| `COMMAND_CODE_API_BASE` | `https://api.commandcode.ai` | Upstream API |
+| `COMMAND_CODE_API_BASE` | `https://api.commandcode.ai` | Command Code API base |
+| `CMDCODE_PROVIDERS_CONFIG` | `~/.cmdcode/providers.json` | Providers map path |
+| `COMMAND_CODE_PROXY_PROVIDER` | `command-code` | Env-only adapter (`command-code` or `openai`) |
+| `COMMAND_CODE_UPSTREAM_API_KEY` | (unset) | Bearer key for the env-only openai adapter |
 | `COMMAND_CODE_PROXY_TIMEOUT` | `600` | Upstream timeout (seconds) |
 | `COMMAND_CODE_PROXY_RETRIES` | `2` | Retry count for transient failures |
 | `COMMAND_CODE_PROXY_CORS` | (unset) | CORS origin header |
@@ -199,6 +215,24 @@ echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-1
 | `COMMAND_CODE_PROXY_RATE_LIMIT_BACKEND` | `local` | Rate limit backend (`local` or `redis`) |
 | `COMMAND_CODE_PROXY_RATE_LIMIT_REDIS_URL` | (unset) | Redis URL for distributed rate limiting |
 
+## Providers
+
+Declared in `~/.cmdcode/providers.json` (override with
+`CMDCODE_PROVIDERS_CONFIG`). Each entry supports:
+
+| Field | Description |
+|-------|-------------|
+| `type` | Adapter: `command-code`, `openai`, `anthropic`, or `gemini` |
+| `options.baseURL` | Upstream base URL (adapter-specific default if omitted) |
+| `options.apiKey` | API key — `{env:VAR}` interpolation supported |
+| `models` | Model ids this provider serves (routes + `/v1/models` listing) |
+| `learning` | Serve taste-learning requests from the MCP server |
+| `enabled` | `false` removes it from routing without deleting the entry |
+
+The first enabled entry is the fallback for undeclared models. Edits apply
+on the next request (hot reload); a broken config file keeps the last-good
+router. Manage entries with `cmdcode connect` instead of hand-editing.
+
 ## Endpoints
 
 | Method | Path | Description |
@@ -208,7 +242,7 @@ echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-1
 | `GET` | `/metrics` | Prometheus-formatted metrics |
 | `POST` | `/v1/chat/completions` | OpenAI chat completion (stream + non-stream) |
 | `POST` | `/v1/messages` | Anthropic messages API (stream + non-stream) |
-| `POST` | `/v1/responses` | OpenAI Responses API (stateless) |
+| `POST` | `/v1/responses` | OpenAI Responses API (with `previous_response_id` session chaining) |
 | `POST` | `…:generateContent` / `…:streamGenerateContent` | Google Gemini |
 | `GET`/`POST` | `/api/tags`, `/api/chat` | Ollama native |
 

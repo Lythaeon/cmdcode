@@ -2,19 +2,42 @@
 
 ## What is this?
 
-A local HTTP proxy that speaks the **OpenAI chat completions API** on the
-client side and translates to **Command Code's proprietary wire protocol** on
-the upstream side. Written in Rust using Pingora for production-grade
-performance.
+A local, multi-provider LLM gateway written in Rust using Pingora. It
+speaks **five client protocols** on the frontend and routes to **any mix of
+configured upstream providers** through a hot-reloadable router:
 
 ```
-┌──────────────────────┐         ┌──────────────────┐         ┌─────────────────────────────┐
-│  OpenCode / LiteLLM  │  POST   │  command-code-   │  POST   │  api.commandcode.ai         │
-│  / curl / any OA     │ ──────> │  proxy           │ ──────> │  /alpha/generate            │
-│  compatible client   │ <────── │  (localhost:     │ <────── │  (NDJSON stream)            │
-│                      │  SSE    │   18080)         │  NDJSON │                             │
-└──────────────────────┘         └──────────────────┘         └─────────────────────────────┘
+                 five frontends                     provider adapters
+┌─────────────────────────────┐    ┌──────────────────┐    ┌──────────────────────────┐
+│ /v1/chat/completions (OA)   │    │                  │    │ command-code             │
+│ /v1/messages       (Anthro) │ ─> │ Provider Router  │ ─> │ openai-compatible        │
+│ :generateContent   (Gemini) │    │ (hot reload,     │    │ anthropic-native         │
+│ /v1/responses      (Resp.)  │    │  per-model map)  │    │ gemini-native            │
+│ /api/chat          (Ollama) │    │                  │    │ (providers.json)         │
+└─────────────────────────────┘    └──────────────────┘    └──────────────────────────┘
 ```
+
+Every request is normalized into an internal OpenAI-format representation;
+frontend adapters convert inbound dialects into it and upstream adapters
+convert it out again. This N×M problem is reduced to N+M adapters.
+
+### Adapter contracts
+
+**Frontends** (inbound): parse a protocol-specific body into
+`ChatCompletionRequest`, render responses/streams back out in the same
+dialect.
+
+**Upstreams** (`Provider` trait): given the normalized request, supply
+
+- `endpoint(model, streaming)` — full upstream URL
+- `headers()` — identity/auth headers
+- `build_body()` — provider wire format (with taste section injected)
+- `translate_line()` — upstream stream line → OpenAI SSE chunk frames
+- `parse_non_streaming()` — non-streaming body → OpenAI completion JSON
+- `should_rotate()/on_auth_rejected()` — credential failure handling
+
+The Command Code adapter preserves the exact CLI fingerprint so upstream
+cannot distinguish proxy traffic from the official CLI.
 
 ## Why?
 
