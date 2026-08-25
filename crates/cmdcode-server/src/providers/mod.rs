@@ -246,15 +246,6 @@ impl RouterHandle {
     }
 }
 
-/// Resolve an entry's API key: explicit options first, then the
-/// per-provider secret store (`~/.cmdcode/secrets.json`).
-fn entry_api_key(
-    entry_id: &str,
-    entry: &cmdcode_core::provider_config::ProviderEntry,
-) -> Option<String> {
-    cmdcode_core::provider_secrets::resolve_api_key(entry_id, entry.options.api_key.as_deref())
-}
-
 impl ProviderRouter {
     /// Resolve the provider serving `model`, falling back to the default.
     pub fn resolve(&self, model: &str) -> &Arc<dyn Provider> {
@@ -313,7 +304,7 @@ impl ProviderRouter {
                         base_url: entry
                             .base_url()
                             .unwrap_or_else(|| "http://localhost".into()),
-                        api_key: entry_api_key(key, entry),
+                        api_key: entry.api_key(),
                     })
                 }
                 cmdcode_core::provider_config::AdapterKind::Anthropic => {
@@ -321,7 +312,7 @@ impl ProviderRouter {
                         base_url: entry
                             .base_url()
                             .unwrap_or_else(|| "https://api.anthropic.com".into()),
-                        api_key: entry_api_key(key, entry),
+                        api_key: entry.api_key(),
                     })
                 }
                 cmdcode_core::provider_config::AdapterKind::Gemini => {
@@ -329,7 +320,7 @@ impl ProviderRouter {
                         base_url: entry
                             .base_url()
                             .unwrap_or_else(|| gemini::DEFAULT_BASE.into()),
-                        api_key: entry_api_key(key, entry),
+                        api_key: entry.api_key(),
                     })
                 }
                 cmdcode_core::provider_config::AdapterKind::CommandCode => {
@@ -403,7 +394,7 @@ impl ProviderRouter {
                                 base_url: entry
                                     .base_url()
                                     .unwrap_or_else(|| "http://localhost".into()),
-                                api_key: entry_api_key(key, entry),
+                                api_key: entry.api_key(),
                             })
                         }
                         cmdcode_core::provider_config::AdapterKind::Anthropic => {
@@ -411,7 +402,7 @@ impl ProviderRouter {
                                 base_url: entry
                                     .base_url()
                                     .unwrap_or_else(|| "https://api.anthropic.com".into()),
-                                api_key: entry_api_key(key, entry),
+                                api_key: entry.api_key(),
                             })
                         }
                         cmdcode_core::provider_config::AdapterKind::Gemini => {
@@ -419,7 +410,7 @@ impl ProviderRouter {
                                 base_url: entry.base_url().unwrap_or_else(|| {
                                     "https://generativelanguage.googleapis.com/v1beta".into()
                                 }),
-                                api_key: entry_api_key(key, entry),
+                                api_key: entry.api_key(),
                             })
                         }
                         cmdcode_core::provider_config::AdapterKind::CommandCode => {

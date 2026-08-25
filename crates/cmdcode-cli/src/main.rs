@@ -46,10 +46,6 @@ fn main() {
             Some(ConnectCommand::List) => commands::connect::list(),
             Some(ConnectCommand::Add) => commands::connect::add(),
             Some(ConnectCommand::Remove { name }) => commands::connect::remove(&name),
-            Some(ConnectCommand::Login { name, key }) => {
-                commands::connect::login(&name, key.as_deref())
-            }
-            Some(ConnectCommand::Logout { name }) => commands::connect::logout(&name),
             Some(ConnectCommand::Enable { name }) => commands::connect::enable(&name),
             Some(ConnectCommand::Disable { name }) => commands::connect::disable(&name),
             Some(ConnectCommand::Test { name }) => {

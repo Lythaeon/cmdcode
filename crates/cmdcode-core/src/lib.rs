@@ -33,8 +33,6 @@ pub mod ollama_wire;
 /// provider config.
 pub mod provider_config;
 
-/// Per-provider API key storage (secrets.json, chmod 0600).
-pub mod provider_secrets;
 /// Rate limiting for API requests.
 /// rate limiter.
 pub mod rate_limiter;

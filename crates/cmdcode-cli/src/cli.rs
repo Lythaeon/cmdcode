@@ -200,21 +200,6 @@ pub enum ConnectCommand {
         /// Provider id from providers.json
         name: String,
     },
-    /// Store the API key for a provider (masked prompt, validated)
-    Login {
-        /// Provider id from providers.json
-        name: String,
-
-        /// Provide the key non-interactively (otherwise a masked prompt is
-        /// shown). Prefer `{env:VAR}` refs in providers.json for scripts.
-        #[arg(long)]
-        key: Option<String>,
-    },
-    /// Remove the stored API key for a provider
-    Logout {
-        /// Provider id from providers.json
-        name: String,
-    },
     /// Enable a disabled provider (applies instantly via hot reload)
     Enable {
         /// Provider id from providers.json
