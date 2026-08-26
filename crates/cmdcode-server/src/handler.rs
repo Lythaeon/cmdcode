@@ -1085,7 +1085,7 @@ impl CommandCodeProxy {
         resp.insert_header("content-type", content_type)?;
         session.write_response_header(Box::new(resp), false).await?;
         session
-            .write_response_body(Some(Bytes::from(body.as_bytes().to_vec())), true)
+            .write_response_body(Some(Bytes::copy_from_slice(body.as_bytes())), true)
             .await?;
         Ok(())
     }

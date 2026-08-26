@@ -490,7 +490,7 @@ const MAX_STREAM_BUFFER: usize = 1024 * 1024;
 /// (memory-exhaustion DoS). Reduced from 16MB to 4MB to limit per-stream
 /// memory usage while still allowing legitimate large responses.
 const MAX_STREAM_BUFFER_LIMIT: usize = 4 * 1024 * 1024;
-fn cached_structure(cwd: &str) -> Vec<String> {
+fn cached_structure(cwd: &str) -> Arc<Vec<String>> {
     use std::sync::Mutex;
     type CacheEntry = (String, std::time::Instant, Arc<Vec<String>>);
     static CACHE: Mutex<Option<CacheEntry>> = Mutex::new(None);
@@ -503,7 +503,7 @@ fn cached_structure(cwd: &str) -> Vec<String> {
 
     if let Some((cached_cwd, cached_at, cached)) = guard.as_ref() {
         if cached_cwd == cwd && cached_at.elapsed().as_secs() < STRUCTURE_CACHE_TTL_SECS {
-            return (**cached).clone();
+            return cached.clone();
         }
     }
 
@@ -517,9 +517,9 @@ fn cached_structure(cwd: &str) -> Vec<String> {
         })
         .unwrap_or_default();
 
-    let shared = Arc::new(structure.clone());
-    *guard = Some((cwd.to_string(), now, shared));
-    structure
+    let shared = Arc::new(structure);
+    *guard = Some((cwd.to_string(), now, shared.clone()));
+    shared
 }
 
 /// Build the config block the upstream requires (workingDir, date, ...).
@@ -542,7 +542,7 @@ pub fn build_config(cwd: &str) -> serde_json::Value {
         "workingDir": cwd,
         "date": date,
         "environment": "linux",
-        "structure": structure,
+        "structure": *structure,
         "isGitRepo": false,
         "currentBranch": "",
         "mainBranch": "",
