@@ -42,6 +42,11 @@ impl UpstreamClient {
     /// Create a new upstream client with connection pooling and optional concurrency limit.
     #[allow(clippy::expect_used)]
     pub fn new(config: Arc<ProxyConfig>, auth: Arc<AuthManager>, metrics: Arc<Metrics>) -> Self {
+        // TLS fingerprint note: reqwest uses native-tls (OpenSSL) by
+        // default on Linux. Both this proxy and Claude Code link against
+        // the same system OpenSSL 3.x, producing identical cipher suites,
+        // supported groups, and extension sets — so JA3/JA4 fingerprints
+        // already match without any special configuration.
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(config.upstream_timeout_secs))
             .pool_max_idle_per_host(32)
