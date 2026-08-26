@@ -187,10 +187,6 @@ impl UpstreamClient {
                                 }
                             }
                         }
-                        let upstream_err = UpstreamError::HttpError {
-                            status,
-                            body: body_text.clone(),
-                        };
                         if provider.should_rotate(status, &body_text) && !auth_retried {
                             if let Some(name) = provider.on_auth_rejected(&self.auth).await {
                                 tracing::warn!(
@@ -205,6 +201,10 @@ impl UpstreamClient {
                             auth_retried = true;
                             continue; // refresh once, not against the retry budget
                         }
+                        let upstream_err = UpstreamError::HttpError {
+                            status,
+                            body: body_text,
+                        };
                         if is_retryable(status) && attempt + 1 < max_attempts {
                             last_err = Some(upstream_err);
                             let backoff = Duration::from_millis(100 * 2u64.pow(attempt));
@@ -490,11 +490,10 @@ const MAX_STREAM_BUFFER: usize = 1024 * 1024;
 /// (memory-exhaustion DoS). Reduced from 16MB to 4MB to limit per-stream
 /// memory usage while still allowing legitimate large responses.
 const MAX_STREAM_BUFFER_LIMIT: usize = 4 * 1024 * 1024;
-
 fn cached_structure(cwd: &str) -> Vec<String> {
     use std::sync::Mutex;
-
-    static CACHE: Mutex<Option<(String, std::time::Instant, Vec<String>)>> = Mutex::new(None);
+    type CacheEntry = (String, std::time::Instant, Arc<Vec<String>>);
+    static CACHE: Mutex<Option<CacheEntry>> = Mutex::new(None);
 
     let now = std::time::Instant::now();
     let mut guard = match CACHE.lock() {
@@ -504,7 +503,7 @@ fn cached_structure(cwd: &str) -> Vec<String> {
 
     if let Some((cached_cwd, cached_at, cached)) = guard.as_ref() {
         if cached_cwd == cwd && cached_at.elapsed().as_secs() < STRUCTURE_CACHE_TTL_SECS {
-            return cached.clone();
+            return (**cached).clone();
         }
     }
 
@@ -518,7 +517,8 @@ fn cached_structure(cwd: &str) -> Vec<String> {
         })
         .unwrap_or_default();
 
-    *guard = Some((cwd.to_string(), now, structure.clone()));
+    let shared = Arc::new(structure.clone());
+    *guard = Some((cwd.to_string(), now, shared));
     structure
 }
 

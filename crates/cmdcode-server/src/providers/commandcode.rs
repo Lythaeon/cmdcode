@@ -206,8 +206,8 @@ impl Provider for CommandCodeProvider {
         }
         let lower = error_body.to_lowercase();
         lower.contains("insufficient credits")
-            || lower.contains("credit")
-                && (lower.contains("exhaust") || lower.contains("purchase more"))
+            || (lower.contains("credit")
+                && (lower.contains("exhaust") || lower.contains("purchase more")))
     }
 
     async fn on_auth_rejected(&self, auth: &AuthManager) -> Option<String> {

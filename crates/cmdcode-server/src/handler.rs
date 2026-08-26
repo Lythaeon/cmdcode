@@ -600,7 +600,8 @@ impl ProxyHttp for CommandCodeProxy {
                     }
                     Frontend::OpenAi => completion,
                 };
-                self.metrics.inc_bytes_out(out.to_string().len());
+                let bytes_out = serde_json::to_vec(&out).unwrap_or_default();
+                self.metrics.inc_bytes_out(bytes_out.len());
                 self.send_json(session, 200, &out).await?;
                 Ok(true)
             }
@@ -850,7 +851,7 @@ impl CommandCodeProxy {
         ) -> std::result::Result<usize, pingora_error::BError> {
             let len = line.len();
             session
-                .write_response_body(Some(Bytes::from(line.to_string())), false)
+                .write_response_body(Some(Bytes::copy_from_slice(line.as_bytes())), false)
                 .await?;
             Ok(len)
         }
