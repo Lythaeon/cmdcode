@@ -9,6 +9,7 @@
 //! - `openai`: pass-through for any OpenAI-compatible endpoint
 
 pub mod anthropic;
+pub mod anthropic_tls;
 pub mod commandcode;
 pub mod gemini;
 pub mod openai;
