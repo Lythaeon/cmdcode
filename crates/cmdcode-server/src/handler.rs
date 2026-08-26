@@ -948,10 +948,7 @@ impl CommandCodeProxy {
         self.metrics.inc_bytes_out(bytes_out);
         self.metrics.stream_finished();
 
-        tracing::debug!(
-            chunks = chunks,
-            "completed (stream)"
-        );
+        tracing::debug!(chunks = chunks, "completed (stream)");
         Ok(true)
     }
 

@@ -158,9 +158,7 @@ impl UpstreamClient {
                                         status,
                                         body: err.to_string(),
                                     };
-                                    if provider.should_rotate(status, &body_text)
-                                        && !auth_retried
-                                    {
+                                    if provider.should_rotate(status, &body_text) && !auth_retried {
                                         if let Some(name) =
                                             provider.on_auth_rejected(&self.auth).await
                                         {
