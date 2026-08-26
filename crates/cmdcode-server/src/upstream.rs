@@ -164,7 +164,9 @@ impl UpstreamClient {
                                         status,
                                         body: err.to_string(),
                                     };
-                                    if provider.is_auth_rejected(status) && !auth_retried {
+                                    if provider.should_rotate(status, &body_text)
+                                        && !auth_retried
+                                    {
                                         if let Some(name) =
                                             provider.on_auth_rejected(&self.auth).await
                                         {
@@ -195,9 +197,9 @@ impl UpstreamClient {
                         }
                         let upstream_err = UpstreamError::HttpError {
                             status,
-                            body: body_text,
+                            body: body_text.clone(),
                         };
-                        if provider.is_auth_rejected(status) && !auth_retried {
+                        if provider.should_rotate(status, &body_text) && !auth_retried {
                             if let Some(name) = provider.on_auth_rejected(&self.auth).await {
                                 tracing::warn!(
                                     account = %name,
