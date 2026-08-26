@@ -127,7 +127,7 @@ impl ProxyConfig {
             .unwrap_or(30);
 
         let log_level =
-            env::var("COMMAND_CODE_PROXY_LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
+            env::var("COMMAND_CODE_PROXY_LOG_LEVEL").unwrap_or_else(|_| "warn".to_string());
 
         let max_body_size = env::var("COMMAND_CODE_PROXY_MAX_BODY_SIZE")
             .unwrap_or_else(|_| "10485760".to_string()) // 10MB default

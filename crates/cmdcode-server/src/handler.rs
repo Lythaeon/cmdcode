@@ -570,9 +570,8 @@ impl ProxyHttp for CommandCodeProxy {
 
         match result {
             Ok(upstream::UpstreamResponse::Json(completion)) => {
-                tracing::info!(
+                tracing::debug!(
                     request_id = %ctx.request_id.as_str(),
-                    elapsed_ms = start.elapsed().as_millis() as u64,
                     "completed (non-stream)"
                 );
                 if let Some((ref id, ref msgs)) = pending_session_entry {
@@ -704,10 +703,7 @@ impl CommandCodeProxy {
         mut anthropic_renderer: Option<StreamRenderer>,
         session_entry: Option<(String, Vec<cmdcode_core::wire_format::OpenAiMessage>)>,
     ) -> PingoraResult<bool> {
-        tracing::info!(
-            elapsed_ms = start.elapsed().as_millis() as u64,
-            "starting stream"
-        );
+        tracing::debug!("starting stream");
         self.metrics.stream_started();
 
         let idle_timeout = std::time::Duration::from_secs(self.config.stream_idle_timeout_secs);
@@ -952,8 +948,7 @@ impl CommandCodeProxy {
         self.metrics.inc_bytes_out(bytes_out);
         self.metrics.stream_finished();
 
-        tracing::info!(
-            elapsed_ms = start.elapsed().as_millis() as u64,
+        tracing::debug!(
             chunks = chunks,
             "completed (stream)"
         );
