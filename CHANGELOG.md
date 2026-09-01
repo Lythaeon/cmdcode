@@ -4,6 +4,49 @@ All notable changes to cmdcode are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-08-31
+
+The OpenCode compatibility release. Fixes duplicate tool call ID errors
+and context overflow detection so OpenCode's auto-compaction works
+seamlessly through the proxy.
+
+### Added
+- **Request-side tool call deduplication** — `deduplicate_tool_calls()`
+  on `ChatCompletionRequest` removes duplicate tool call IDs from
+  assistant messages and duplicate tool-result messages before forwarding
+  to upstream LLMs. Prevents "Duplicate value for 'tool_call_id'" errors
+  from clients that accumulate duplicate entries in conversation history.
+- **Response-side tool call deduplication** — streaming `tool-call` and
+  `tool-input-end` events are deduplicated via `seen_tool_calls` HashSet
+  on `StreamState`. Duplicate events from upstream are skipped with a
+  counter, preventing client streaming validator failures.
+- **Context overflow error detection** — upstream HTTP errors are parsed
+  and inspected for context length indicators (`context_length_exceeded`
+  code, "context length" / "token limit" / "exceeds the model's maximum
+  context" in message). Matching errors are forwarded with
+  `type: "invalid_request_error"` and `code: "context_length_exceeded"`
+  so OpenCode can trigger auto-compaction instead of stopping the session.
+- **Duplicate finish event suppression** — `finish` and `finish-step`
+  events are deduplicated; at most one terminal chunk with `finish_reason`
+  + usage is emitted per stream.
+
+### Fixed
+- **Tool result removal during deduplication** — the initial dedup
+  implementation incorrectly marked the first tool-result message for
+  removal instead of actual duplicates. Rewrote to use separate passes:
+  first collect tool_call_ids from assistant messages, then remove
+  duplicate tool-result messages.
+- **Tool input index inflation** — `tool-input-start` now only increments
+  `tool_index` when inserting a new entry (`or_insert_with`) instead of
+  unconditionally, preventing index gaps when duplicate start events are
+  received.
+
+### Performance
+- Tool call deduplication runs once per request with O(n) HashSet
+  operations; no measurable overhead on typical conversation lengths.
+
+**Compare**: https://github.com/Lythaeon/cmdcode/compare/v0.4.0...v0.5.0
+
 ## [0.4.0] - 2026-08-25
 
 The provider-agnostic gateway release. cmdcode is no longer only a

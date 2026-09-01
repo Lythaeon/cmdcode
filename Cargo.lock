@@ -361,7 +361,7 @@ dependencies = [
 
 [[package]]
 name = "cmdcode"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "clap",
  "cmdcode-core",
@@ -378,7 +378,7 @@ dependencies = [
 
 [[package]]
 name = "cmdcode-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dirs",
  "proptest",
@@ -394,7 +394,7 @@ dependencies = [
 
 [[package]]
 name = "cmdcode-mcp"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cmdcode-core",
  "dirs",
@@ -409,7 +409,7 @@ dependencies = [
 
 [[package]]
 name = "cmdcode-server"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "bytes",
