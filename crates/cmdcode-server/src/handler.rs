@@ -561,6 +561,17 @@ impl ProxyHttp for CommandCodeProxy {
         let is_stream = body.stream.unwrap_or(false);
         self.metrics.inc_request(is_stream);
 
+        // Deduplicate tool call IDs to prevent upstream rejection
+        let original_count = body.messages.len();
+        body.deduplicate_tool_calls();
+        if body.messages.len() != original_count {
+            tracing::info!(
+                request_id = %ctx.request_id.as_str(),
+                removed = original_count - body.messages.len(),
+                "deduplicated tool call IDs in message history"
+            );
+        }
+
         // Forward to upstream
         let start = Instant::now();
         let result = self
@@ -656,12 +667,56 @@ impl ProxyHttp for CommandCodeProxy {
                     cmdcode_core::error::UpstreamError::HttpError { status, .. } => *status,
                     _ => 502,
                 };
-                let err = serde_json::json!({
-                    "error": {
-                        "message": e.to_string(),
-                        "type": "upstream_error"
+                let err_msg = e.to_string();
+                // Detect context length errors and forward them in the format
+                // opencode expects to trigger auto-compaction.
+                // Try to parse the upstream error body to extract the error code.
+                let err = if let cmdcode_core::error::UpstreamError::HttpError { body, .. } = &e {
+                    if let Ok(upstream_err) = serde_json::from_str::<serde_json::Value>(body) {
+                        // Check if the upstream error has a code indicating context overflow
+                        let code = upstream_err.get("code").and_then(|c| c.as_str()).unwrap_or("");
+                        let err_type = upstream_err.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                        let message = upstream_err.get("message").and_then(|m| m.as_str()).unwrap_or(&err_msg);
+                        
+                        if code == "context_length_exceeded" 
+                            || err_type == "context_length_exceeded"
+                            || message.contains("context_length_exceeded")
+                            || message.contains("context length")
+                            || message.contains("maximum context length")
+                            || message.contains("token limit")
+                            || message.contains("exceeds the model's maximum context")
+                        {
+                            serde_json::json!({
+                                "error": {
+                                    "message": message,
+                                    "type": "invalid_request_error",
+                                    "code": "context_length_exceeded"
+                                }
+                            })
+                        } else {
+                            serde_json::json!({
+                                "error": {
+                                    "message": err_msg,
+                                    "type": "upstream_error"
+                                }
+                            })
+                        }
+                    } else {
+                        serde_json::json!({
+                            "error": {
+                                "message": err_msg,
+                                "type": "upstream_error"
+                            }
+                        })
                     }
-                });
+                } else {
+                    serde_json::json!({
+                        "error": {
+                            "message": err_msg,
+                            "type": "upstream_error"
+                        }
+                    })
+                };
                 self.send_json(session, status, &err).await?;
                 Ok(true)
             }

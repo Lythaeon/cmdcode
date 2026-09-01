@@ -266,6 +266,7 @@ impl UpstreamClient {
                                 finish_seen: false,
                                 tool_parts: std::collections::HashMap::new(),
                                 skipped_by_type: std::collections::HashMap::new(),
+                                seen_tool_calls: std::collections::HashSet::new(),
                             };
 
                             let mut done = false;
@@ -572,6 +573,9 @@ pub struct StreamState<'a> {
     /// seeds the entry; `tool-input-delta` appends; `tool-input-end` flushes
     /// it as a single OpenAI `tool_calls` chunk.
     pub tool_parts: std::collections::HashMap<String, (u32, String, String)>,
+    /// Emitted tool call IDs — deduplicates duplicate `tool-call` events
+    /// from the upstream that share the same tool_call_id.
+    pub seen_tool_calls: std::collections::HashSet<String>,
 }
 
 /// Result of translating a single upstream NDJSON line.
@@ -662,6 +666,12 @@ pub fn translate_line(line: &str, state: &mut StreamState) -> LineOutcome {
                 serde_json::Value::Null => String::new(),
                 other => serde_json::to_string(other).unwrap_or_default(),
             };
+            // Deduplicate: if we've already emitted a chunk for this tool_call_id,
+            // skip it — a duplicate breaks client streaming validators.
+            if !tc_id.is_empty() && !state.seen_tool_calls.insert(tc_id.clone()) {
+                state.skipped += 1;
+                return LineOutcome::Skip;
+            }
             let idx = state.tool_index;
             state.tool_index += 1;
             serde_json::json!({
@@ -768,13 +778,15 @@ pub fn translate_line(line: &str, state: &mut StreamState) -> LineOutcome {
                 // Seed the accumulator with a stable OpenAI index and the tool
                 // name (only `tool-input-start` carries the name; the end/delta
                 // events reference it by id only).
-                let idx = state.tool_index;
-                state.tool_index += 1;
                 let name = evt.tool_name.clone().unwrap_or_default();
+                let idx = state.tool_index;
                 state
                     .tool_parts
                     .entry(id)
-                    .or_insert((idx, name, String::new()));
+                    .or_insert_with(|| {
+                        state.tool_index += 1;
+                        (idx, name, String::new())
+                    });
             }
             return LineOutcome::Skip;
         }
@@ -790,6 +802,13 @@ pub fn translate_line(line: &str, state: &mut StreamState) -> LineOutcome {
         }
         "tool-input-end" | "tool-input-available" => {
             let id = evt.id.clone().unwrap_or_default();
+            // Deduplicate: if we've already emitted a chunk for this tool_call_id
+            // (via `tool-call` or a prior `tool-input-end`), skip it.
+            if !id.is_empty() && !state.seen_tool_calls.insert(id.clone()) {
+                state.tool_parts.remove(&id);
+                state.skipped += 1;
+                return LineOutcome::Skip;
+            }
             let (idx, name, args) = match state.tool_parts.remove(&id) {
                 Some(v) => v,
                 None => {
@@ -1162,6 +1181,7 @@ mod tests {
             finish_seen: false,
             tool_parts: std::collections::HashMap::new(),
             skipped_by_type: std::collections::HashMap::new(),
+            seen_tool_calls: std::collections::HashSet::new(),
         }
     }
 
@@ -1439,6 +1459,7 @@ mod tests {
                 finish_seen: false,
                 tool_parts: std::collections::HashMap::new(),
                 skipped_by_type: std::collections::HashMap::new(),
+                seen_tool_calls: std::collections::HashSet::new(),
             };
             match translate_line(&line, &mut s) {
                 LineOutcome::Skip => {}

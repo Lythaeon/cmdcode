@@ -325,6 +325,7 @@ mod tests {
             finish_seen: false,
             tool_parts: std::collections::HashMap::new(),
             skipped_by_type: std::collections::HashMap::new(),
+            seen_tool_calls: std::collections::HashSet::new(),
         }
     }
 

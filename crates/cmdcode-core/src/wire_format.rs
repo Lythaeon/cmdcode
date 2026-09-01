@@ -1,6 +1,6 @@
 pub use crate::types::{Effort, FinishReason, ModelId};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // === OpenAI request types =================================================
 
@@ -59,6 +59,64 @@ pub struct ChatCompletionRequest {
     /// Number of top log probabilities to return.
     #[serde(default)]
     pub top_logprobs: Option<u32>,
+}
+
+impl ChatCompletionRequest {
+    /// Deduplicate tool call IDs in the message history.
+    ///
+    /// Some clients (notably OpenCode) can accumulate duplicate tool call IDs
+    /// in their conversation history, which causes upstream LLM APIs to reject
+    /// the request with "Duplicate value for 'tool_call_id'".
+    ///
+    /// This method removes duplicate tool calls from assistant messages and
+    /// duplicate tool-result messages, keeping only the first occurrence.
+    pub fn deduplicate_tool_calls(&mut self) {
+        // First pass: collect all tool_call_ids from assistant messages
+        let mut assistant_tool_call_ids = HashSet::new();
+        let mut duplicate_assistant_indices = Vec::new();
+
+        for (i, msg) in self.messages.iter().enumerate() {
+            if msg.role == "assistant" {
+                if let Some(ref tool_calls) = msg.tool_calls {
+                    for tc in tool_calls {
+                        if let Some(ref id) = tc.id {
+                            if !assistant_tool_call_ids.insert(id.clone()) {
+                                // This is a duplicate tool call in assistant messages
+                                duplicate_assistant_indices.push(i);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Second pass: remove duplicate assistant messages (keep first occurrence)
+        for i in duplicate_assistant_indices.into_iter().rev() {
+            if let Some(msg) = self.messages.get(i) {
+                if msg.role == "assistant" && msg.tool_calls.is_some() {
+                    self.messages.remove(i);
+                }
+            }
+        }
+
+        // Third pass: remove duplicate tool-result messages
+        let mut seen_tool_results = HashSet::new();
+        let mut duplicate_tool_result_indices = Vec::new();
+
+        for (i, msg) in self.messages.iter().enumerate() {
+            if msg.role == "tool" {
+                if let Some(ref tool_call_id) = msg.tool_call_id {
+                    if !seen_tool_results.insert(tool_call_id.clone()) {
+                        duplicate_tool_result_indices.push(i);
+                    }
+                }
+            }
+        }
+
+        for i in duplicate_tool_result_indices.into_iter().rev() {
+            self.messages.remove(i);
+        }
+    }
 }
 
 /// Options controlling streaming behaviour.
