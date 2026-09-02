@@ -94,7 +94,7 @@ impl Provider for CommandCodeProvider {
 
         serde_json::json!({
             "config": build_config(ctx.cwd),
-            "memory": null,
+            "memory": "",
             "taste": null,
             "skills": null,
             "permissionMode": "standard",
