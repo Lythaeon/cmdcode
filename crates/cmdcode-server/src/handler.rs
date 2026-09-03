@@ -992,6 +992,28 @@ impl CommandCodeProxy {
             cancel.cancel();
         }
         if !client_gone && !abort {
+            // Check if the stream ended without a finish event.
+            // This happens when the upstream closes the connection before
+            // sending a terminal chunk. The client expects a finish_reason
+            // in the stream, so we need to detect this and send an error.
+            if chunks > 0 && !abort {
+                // We emitted chunks but didn't see a finish event.
+                // This is an incomplete stream - send an error to the client.
+                tracing::warn!(
+                    chunks = chunks,
+                    "stream ended without finish event; sending error to client"
+                );
+                let err = serde_json::json!({
+                    "error": {
+                        "message": "upstream stream ended before terminal chunk",
+                        "type": "upstream_error"
+                    }
+                });
+                let _ = self.send_json(session, 502, &err).await;
+                self.metrics.inc_error();
+                self.metrics.stream_finished();
+                return Ok(true);
+            }
             // Confirmed completion — persist the conversation for chaining.
             if let Some((id, msgs)) = session_entry {
                 self.sessions.insert(id, msgs);
