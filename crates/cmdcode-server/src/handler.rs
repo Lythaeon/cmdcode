@@ -674,11 +674,20 @@ impl ProxyHttp for CommandCodeProxy {
                 let err = if let cmdcode_core::error::UpstreamError::HttpError { body, .. } = &e {
                     if let Ok(upstream_err) = serde_json::from_str::<serde_json::Value>(body) {
                         // Check if the upstream error has a code indicating context overflow
-                        let code = upstream_err.get("code").and_then(|c| c.as_str()).unwrap_or("");
-                        let err_type = upstream_err.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                        let message = upstream_err.get("message").and_then(|m| m.as_str()).unwrap_or(&err_msg);
-                        
-                        if code == "context_length_exceeded" 
+                        let code = upstream_err
+                            .get("code")
+                            .and_then(|c| c.as_str())
+                            .unwrap_or("");
+                        let err_type = upstream_err
+                            .get("type")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("");
+                        let message = upstream_err
+                            .get("message")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or(&err_msg);
+
+                        if code == "context_length_exceeded"
                             || err_type == "context_length_exceeded"
                             || message.contains("context_length_exceeded")
                             || message.contains("context length")

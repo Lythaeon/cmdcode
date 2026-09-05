@@ -322,6 +322,11 @@ pub struct ResponsesStreamRenderer {
     /// Fixed response id used in emitted events (server-assigned
     /// `resp_*` id when session chaining is active).
     response_id: Option<String>,
+    /// Track active tool call state for emitting proper lifecycle events.
+    /// Contains (call_id, name, arguments_buffer) for the current tool call.
+    active_tool_call: Option<(String, String, String)>,
+    /// Output index for output_item events.
+    output_index: u32,
 }
 
 impl ResponsesStreamRenderer {
@@ -429,15 +434,81 @@ impl ResponsesStreamRenderer {
 
         if let Some(calls) = delta.get("tool_calls").and_then(|c| c.as_array()) {
             for call in calls {
+                // Check if this is a new tool call (has id and name)
+                let call_id = call
+                    .get("id")
+                    .and_then(|id| id.as_str())
+                    .unwrap_or("call_0")
+                    .to_string();
+                let call_name = call
+                    .pointer("/function/name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                // If we have a new tool call with a name, emit output_item.added
+                if !call_name.is_empty() {
+                    // If there was a previous tool call, emit output_item.done for it
+                    if let Some((prev_id, prev_name, prev_args)) = self.active_tool_call.take() {
+                        out.push(Self::frame(
+                            "response.function_call_arguments.done",
+                            json!({
+                                "type": "response.function_call_arguments.done",
+                                "arguments": prev_args,
+                            }),
+                        ));
+                        out.push(Self::frame(
+                            "response.output_item.done",
+                            json!({
+                                "type": "response.output_item.done",
+                                "output_index": self.output_index,
+                                "item": {
+                                    "type": "function_call",
+                                    "id": prev_id,
+                                    "call_id": prev_id,
+                                    "name": prev_name,
+                                    "arguments": prev_args,
+                                    "status": "completed",
+                                },
+                            }),
+                        ));
+                        self.output_index += 1;
+                    }
+
+                    // Emit output_item.added for the new tool call
+                    out.push(Self::frame(
+                        "response.output_item.added",
+                        json!({
+                            "type": "response.output_item.added",
+                            "output_index": self.output_index,
+                            "item": {
+                                "type": "function_call",
+                                "id": call_id,
+                                "call_id": call_id,
+                                "name": call_name,
+                                "arguments": "",
+                                "status": "in_progress",
+                            },
+                        }),
+                    ));
+                    self.active_tool_call = Some((call_id, call_name, String::new()));
+                }
+
+                // Emit argument deltas
                 if let Some(args) = call
                     .pointer("/function/arguments")
                     .and_then(|a| a.as_str())
                     .filter(|a| !a.is_empty())
                 {
+                    // Accumulate arguments in the buffer
+                    if let Some((_, _, ref mut buffer)) = self.active_tool_call {
+                        buffer.push_str(args);
+                    }
                     out.push(Self::frame(
                         "response.function_call_arguments.delta",
                         json!({
                             "type": "response.function_call_arguments.delta",
+                            "output_index": self.output_index,
                             "delta": args,
                         }),
                     ));
@@ -450,6 +521,32 @@ impl ResponsesStreamRenderer {
             .and_then(|f| f.as_str())
             .map(str::to_string)
         {
+            // If there's an active tool call, emit done events for it
+            if let Some((call_id, call_name, call_args)) = self.active_tool_call.take() {
+                out.push(Self::frame(
+                    "response.function_call_arguments.done",
+                    json!({
+                        "type": "response.function_call_arguments.done",
+                        "arguments": call_args,
+                    }),
+                ));
+                out.push(Self::frame(
+                    "response.output_item.done",
+                    json!({
+                        "type": "response.output_item.done",
+                        "output_index": self.output_index,
+                        "item": {
+                            "type": "function_call",
+                            "id": call_id,
+                            "call_id": call_id,
+                            "name": call_name,
+                            "arguments": call_args,
+                            "status": "completed",
+                        },
+                    }),
+                ));
+            }
+
             let stop_reason = if finish == "tool_calls" {
                 "function_call"
             } else {
@@ -564,5 +661,67 @@ mod tests {
                         "usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}});
         let frames = r.feed(&format!("data: {c2}"));
         assert!(frames.join("").contains("event: response.completed"));
+    }
+
+    #[test]
+    fn test_stream_renderer_tool_call_events() {
+        let mut r = ResponsesStreamRenderer::new();
+
+        // First chunk: tool call with name
+        let c1 = json!({
+            "id": "x",
+            "model": "m",
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "id": "call_123",
+                        "function": {"name": "bash", "arguments": ""}
+                    }]
+                },
+                "finish_reason": null
+            }]
+        });
+        let frames = r.feed(&format!("data: {c1}"));
+        let joined = frames.join("");
+        assert!(joined.contains("event: response.created"));
+        assert!(joined.contains("event: response.output_item.added"));
+        assert!(joined.contains("\"name\":\"bash\""));
+        assert!(joined.contains("\"call_id\":\"call_123\""));
+
+        // Second chunk: arguments delta
+        let c2 = json!({
+            "id": "x",
+            "model": "m",
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "id": "call_123",
+                        "function": {"arguments": "{\"command\":\"echo hello\"}"}
+                    }]
+                },
+                "finish_reason": null
+            }]
+        });
+        let frames = r.feed(&format!("data: {c2}"));
+        let joined = frames.join("");
+        assert!(joined.contains("event: response.function_call_arguments.delta"));
+        assert!(joined.contains("echo hello"));
+
+        // Third chunk: finish with tool_calls
+        let c3 = json!({
+            "id": "x",
+            "model": "m",
+            "choices": [{
+                "delta": {},
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        });
+        let frames = r.feed(&format!("data: {c3}"));
+        let joined = frames.join("");
+        assert!(joined.contains("event: response.function_call_arguments.done"));
+        assert!(joined.contains("event: response.output_item.done"));
+        assert!(joined.contains("event: response.completed"));
+        assert!(joined.contains("\"arguments\":\"{\\\"command\\\":\\\"echo hello\\\"}\""));
     }
 }
