@@ -11,6 +11,7 @@ use crate::wire_format::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 
 /// One input item of the Responses API.
 #[derive(Debug, Clone, Deserialize)]
@@ -327,6 +328,9 @@ pub struct ResponsesStreamRenderer {
     active_tool_call: Option<(String, String, String)>,
     /// Output index for output_item events.
     output_index: u32,
+    /// Emitted tool call IDs — deduplicates duplicate tool_call events
+    /// from the upstream that share the same call_id.
+    seen_tool_calls: HashSet<String>,
 }
 
 impl ResponsesStreamRenderer {
@@ -446,8 +450,14 @@ impl ResponsesStreamRenderer {
                     .unwrap_or("")
                     .to_string();
 
+                // Deduplicate: if we've already emitted output_item.added for this call_id,
+                // skip the added event but still emit argument deltas.
+                let is_new_call = call_id.is_empty()
+                    || call_id == "call_0"
+                    || self.seen_tool_calls.insert(call_id.clone());
+
                 // If we have a new tool call with a name, emit output_item.added
-                if !call_name.is_empty() {
+                if !call_name.is_empty() && is_new_call {
                     // If there was a previous tool call, emit output_item.done for it
                     if let Some((prev_id, prev_name, prev_args)) = self.active_tool_call.take() {
                         out.push(Self::frame(
@@ -723,5 +733,70 @@ mod tests {
         assert!(joined.contains("event: response.output_item.done"));
         assert!(joined.contains("event: response.completed"));
         assert!(joined.contains("\"arguments\":\"{\\\"command\\\":\\\"echo hello\\\"}\""));
+    }
+
+    #[test]
+    fn test_stream_renderer_deduplicates_tool_calls() {
+        let mut r = ResponsesStreamRenderer::new();
+
+        // First chunk: tool call with name
+        let c1 = json!({
+            "id": "x",
+            "model": "m",
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "id": "call_123",
+                        "function": {"name": "bash", "arguments": ""}
+                    }]
+                },
+                "finish_reason": null
+            }]
+        });
+        let frames = r.feed(&format!("data: {c1}"));
+        assert_eq!(
+            frames
+                .iter()
+                .filter(|f| f.contains("output_item.added"))
+                .count(),
+            1
+        );
+
+        // Second chunk: duplicate tool call with same id - should be skipped
+        let c2 = json!({
+            "id": "x",
+            "model": "m",
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "id": "call_123",
+                        "function": {"name": "bash", "arguments": ""}
+                    }]
+                },
+                "finish_reason": null
+            }]
+        });
+        let frames = r.feed(&format!("data: {c2}"));
+        // Should NOT emit another output_item.added for the same call_id
+        assert!(!frames.join("").contains("output_item.added"));
+
+        // Third chunk: arguments for the original call should still work
+        let c3 = json!({
+            "id": "x",
+            "model": "m",
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "id": "call_123",
+                        "function": {"arguments": "{\"cmd\":\"test\"}"}
+                    }]
+                },
+                "finish_reason": null
+            }]
+        });
+        let frames = r.feed(&format!("data: {c3}"));
+        assert!(frames
+            .join("")
+            .contains("response.function_call_arguments.delta"));
     }
 }
