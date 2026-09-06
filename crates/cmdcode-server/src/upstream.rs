@@ -780,13 +780,10 @@ pub fn translate_line(line: &str, state: &mut StreamState) -> LineOutcome {
                 // events reference it by id only).
                 let name = evt.tool_name.clone().unwrap_or_default();
                 let idx = state.tool_index;
-                state
-                    .tool_parts
-                    .entry(id)
-                    .or_insert_with(|| {
-                        state.tool_index += 1;
-                        (idx, name, String::new())
-                    });
+                state.tool_parts.entry(id).or_insert_with(|| {
+                    state.tool_index += 1;
+                    (idx, name, String::new())
+                });
             }
             return LineOutcome::Skip;
         }
