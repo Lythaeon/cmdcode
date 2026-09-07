@@ -163,8 +163,12 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           # Slice the section for this version out of Keep-a-Changelog format:
           # everything between '## [version]' and the next '## ['.
+          # Use index() for literal matching — regex-escaping the dotted version
+          # in a character-class-free way is error-prone (0.6.0 → [0.6.0] is a
+          # char class). Skip the exact `## [<version>]` header, print until the
+          # next `## [`.
           awk -v ver="[$version]" '
-            $0 ~ "^## \\[" ver "\\]" {found=1; next}
+            index($0, "## " ver) == 1 {found=1; next}
             found && /^## \[/ {exit}
             found {print}
           ' CHANGELOG.md > RELEASE_NOTES.md
