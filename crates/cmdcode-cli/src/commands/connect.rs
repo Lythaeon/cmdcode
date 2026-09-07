@@ -177,11 +177,11 @@ fn toggle_tui() {
 /// Load the raw JSON config (creating an empty one if missing).
 fn load_raw() -> Result<serde_json::Value, String> {
     let path = config_path()?;
-    if let Ok(content) = std::fs::read_to_string(&path) {
-        if !content.trim().is_empty() {
-            return serde_json::from_str(&content)
-                .map_err(|e| format!("parse {}: {e}", path.display()));
-        }
+    if let Ok(content) = std::fs::read_to_string(&path)
+        && !content.trim().is_empty()
+    {
+        return serde_json::from_str(&content)
+            .map_err(|e| format!("parse {}: {e}", path.display()));
     }
     Ok(serde_json::json!({}))
 }

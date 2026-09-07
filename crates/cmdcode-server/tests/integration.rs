@@ -3,8 +3,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::net::TcpListener;
 
 type MockBody = http_body_util::combinators::BoxBody<bytes::Bytes, std::io::Error>;

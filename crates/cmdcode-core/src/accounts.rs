@@ -189,10 +189,10 @@ impl AccountStore {
     /// Default vault path: `~/.cmdcode/accounts.json` (override with
     /// `COMMAND_CODE_ACCOUNTS_FILE`).
     pub fn default_path() -> PathBuf {
-        if let Ok(p) = std::env::var("COMMAND_CODE_ACCOUNTS_FILE") {
-            if !p.trim().is_empty() {
-                return PathBuf::from(p);
-            }
+        if let Ok(p) = std::env::var("COMMAND_CODE_ACCOUNTS_FILE")
+            && !p.trim().is_empty()
+        {
+            return PathBuf::from(p);
         }
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))

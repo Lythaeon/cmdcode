@@ -130,11 +130,11 @@ async fn run_inner() {
     // Wait for proxy to be ready
     let mut ready = false;
     for _ in 0..50 {
-        if let Ok(r) = client.get(format!("{}/health", proxy_url)).send().await {
-            if r.status().is_success() {
-                ready = true;
-                break;
-            }
+        if let Ok(r) = client.get(format!("{}/health", proxy_url)).send().await
+            && r.status().is_success()
+        {
+            ready = true;
+            break;
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
@@ -258,15 +258,15 @@ async fn run_inner() {
 }
 
 fn get_test_token(auth: &serde_json::Value) -> String {
-    if let Some(key) = auth.get("apiKey").and_then(|v| v.as_str()) {
-        if !key.is_empty() {
-            return key.to_string();
-        }
+    if let Some(key) = auth.get("apiKey").and_then(|v| v.as_str())
+        && !key.is_empty()
+    {
+        return key.to_string();
     }
-    if let Some(token) = auth.get("oauthToken").and_then(|v| v.as_str()) {
-        if !token.is_empty() {
-            return token.to_string();
-        }
+    if let Some(token) = auth.get("oauthToken").and_then(|v| v.as_str())
+        && !token.is_empty()
+    {
+        return token.to_string();
     }
     "test-token".to_string()
 }

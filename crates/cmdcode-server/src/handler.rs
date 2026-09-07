@@ -535,18 +535,18 @@ impl ProxyHttp for CommandCodeProxy {
         let (model, effort) = cmdcode_core::types::parse_model_and_effort(model_id_str);
         let model = model.strip_prefix();
 
-        if let Some(ref allowlist) = self.config.model_allowlist {
-            if !allowlist.contains(model.as_str()) {
-                self.metrics.inc_model_denied();
-                let err = serde_json::json!({
-                    "error": {
-                        "message": format!("Model '{}' is not in the allowed models list", model.as_str()),
-                        "type": "invalid_model"
-                    }
-                });
-                self.send_json(session, 400, &err).await?;
-                return Ok(true);
-            }
+        if let Some(ref allowlist) = self.config.model_allowlist
+            && !allowlist.contains(model.as_str())
+        {
+            self.metrics.inc_model_denied();
+            let err = serde_json::json!({
+                "error": {
+                    "message": format!("Model '{}' is not in the allowed models list", model.as_str()),
+                    "type": "invalid_model"
+                }
+            });
+            self.send_json(session, 400, &err).await?;
+            return Ok(true);
         }
 
         tracing::info!(

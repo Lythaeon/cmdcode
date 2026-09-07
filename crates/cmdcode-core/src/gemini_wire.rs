@@ -8,7 +8,7 @@ use crate::wire_format::{
     ChatCompletionRequest, OpenAiFunctionRef, OpenAiMessage, OpenAiTool, OpenAiToolCall,
 };
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// One content part; only `text`, `functionCall` and `functionResponse` are
 /// interpreted, everything else passes through as raw JSON.
@@ -397,10 +397,10 @@ impl GeminiStreamRenderer {
 
         if let Some(choice) = chunk.pointer("/choices/0") {
             if let Some(delta) = choice.get("delta") {
-                if let Some(t) = delta.get("content").and_then(|c| c.as_str()) {
-                    if !t.is_empty() {
-                        text_parts.push(t);
-                    }
+                if let Some(t) = delta.get("content").and_then(|c| c.as_str())
+                    && !t.is_empty()
+                {
+                    text_parts.push(t);
                 }
                 if let Some(calls) = delta.get("tool_calls").and_then(|c| c.as_array()) {
                     for call in calls {

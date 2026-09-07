@@ -1,4 +1,4 @@
-use cmdcode_core::setup::{validate_proxy_url, HarnessType};
+use cmdcode_core::setup::{HarnessType, validate_proxy_url};
 use std::path::{Path, PathBuf};
 
 /// Sanitize a path for display by replacing the home directory with ~.
@@ -482,21 +482,21 @@ fn setup_opencode(config: &HarnessConfig, force: bool) -> Result<PathBuf, String
             }
 
             // Merge MCP servers (replace individual server entries, not extend arrays)
-            if let Some(new_mcp) = new_config.get("mcp") {
-                if let Some(overlay_obj) = new_mcp.as_object() {
-                    let existing_mcp = existing
-                        .get("mcp")
-                        .cloned()
-                        .unwrap_or_else(|| serde_json::json!({}));
-                    if let Some(base_obj) = existing_mcp.as_object() {
-                        let mut merged = base_obj.clone();
-                        for (k, v) in overlay_obj {
-                            merged.insert(k.clone(), v.clone());
-                        }
-                        existing["mcp"] = serde_json::Value::Object(merged);
-                    } else {
-                        existing["mcp"] = new_mcp.clone();
+            if let Some(new_mcp) = new_config.get("mcp")
+                && let Some(overlay_obj) = new_mcp.as_object()
+            {
+                let existing_mcp = existing
+                    .get("mcp")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({}));
+                if let Some(base_obj) = existing_mcp.as_object() {
+                    let mut merged = base_obj.clone();
+                    for (k, v) in overlay_obj {
+                        merged.insert(k.clone(), v.clone());
                     }
+                    existing["mcp"] = serde_json::Value::Object(merged);
+                } else {
+                    existing["mcp"] = new_mcp.clone();
                 }
             }
 
@@ -700,10 +700,11 @@ mod tests {
         };
         let json = config.to_opencode_json();
         assert!(json.get("provider").is_some());
-        assert!(json
-            .get("provider")
-            .and_then(|p| p.get("command-code"))
-            .is_some());
+        assert!(
+            json.get("provider")
+                .and_then(|p| p.get("command-code"))
+                .is_some()
+        );
     }
 
     #[test]

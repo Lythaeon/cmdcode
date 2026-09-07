@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::SystemTime;
 
 /// Replace any character that is illegal in a Prometheus label value with `_`.

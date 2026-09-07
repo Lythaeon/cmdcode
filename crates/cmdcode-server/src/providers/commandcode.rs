@@ -1,12 +1,12 @@
 //! Command Code upstream adapter (`/alpha/generate` NDJSON protocol).
 
 use super::{Provider, RequestContext};
-use crate::upstream::{build_config, extract_system, is_auth_rejected, LineOutcome, StreamState};
+use crate::upstream::{LineOutcome, StreamState, build_config, extract_system, is_auth_rejected};
 use cmdcode_core::auth::AuthManager;
 use cmdcode_core::error::UpstreamError;
 use cmdcode_core::types::FinishReason;
 use cmdcode_core::wire_format::{
-    build_completion, wire_messages, wire_tools, CcUsage, UpstreamEvent,
+    CcUsage, UpstreamEvent, build_completion, wire_messages, wire_tools,
 };
 use std::sync::Arc;
 

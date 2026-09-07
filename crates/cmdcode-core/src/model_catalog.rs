@@ -107,22 +107,9 @@ pub fn get_model_catalog() -> &'static HashMap<ModelId, ModelMeta> {
         // 1. Try env var pointing to a models.md file
         if let Ok(path_str) = std::env::var("COMMAND_CODE_PROXY_MODELS_CATALOG") {
             let path = PathBuf::from(&path_str);
-            if path.exists() {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    let catalog = parse_models_md(&content);
-                    eprintln!(
-                        "[cmdcode] loaded {} models from {}",
-                        catalog.len(),
-                        path.display()
-                    );
-                    return catalog;
-                }
-            }
-        }
-
-        // 2. Try CLI auto-discovery (legacy fallback)
-        if let Some(path) = find_models_md() {
-            if let Ok(content) = std::fs::read_to_string(&path) {
+            if path.exists()
+                && let Ok(content) = std::fs::read_to_string(&path)
+            {
                 let catalog = parse_models_md(&content);
                 eprintln!(
                     "[cmdcode] loaded {} models from {}",
@@ -131,6 +118,19 @@ pub fn get_model_catalog() -> &'static HashMap<ModelId, ModelMeta> {
                 );
                 return catalog;
             }
+        }
+
+        // 2. Try CLI auto-discovery (legacy fallback)
+        if let Some(path) = find_models_md()
+            && let Ok(content) = std::fs::read_to_string(&path)
+        {
+            let catalog = parse_models_md(&content);
+            eprintln!(
+                "[cmdcode] loaded {} models from {}",
+                catalog.len(),
+                path.display()
+            );
+            return catalog;
         }
 
         // 3. Empty catalog — proxy still works, just /v1/models returns empty

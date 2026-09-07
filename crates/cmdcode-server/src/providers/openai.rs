@@ -9,7 +9,7 @@
 //!   is appended — include `/v1` in the base if the provider needs it)
 //! - `COMMAND_CODE_UPSTREAM_API_KEY=<bearer token>`
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::{Provider, RequestContext};
 use crate::upstream::{LineOutcome, StreamState};
@@ -137,10 +137,10 @@ impl Provider for OpenAiProvider {
         _model: &str,
     ) -> Result<serde_json::Value, UpstreamError> {
         // Well-behaved upstreams return a plain JSON completion.
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(text) {
-            if v.get("choices").is_some() {
-                return Ok(v);
-            }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(text)
+            && v.get("choices").is_some()
+        {
+            return Ok(v);
         }
         // Robustness: some endpoints reply with SSE even when stream=false
         // (or ignore our stream flag). Reassemble an OpenAI completion from
@@ -233,12 +233,11 @@ fn assemble_sse_completion(text: &str, model: &str) -> Option<Value> {
             continue;
         };
         saw_any = true;
-        if !id.is_empty() || chunk.get("id").is_some() {
-            if let Some(cid) = chunk.get("id").and_then(|v| v.as_str()) {
-                if id.is_empty() {
-                    id = cid.to_string();
-                }
-            }
+        if (!id.is_empty() || chunk.get("id").is_some())
+            && let Some(cid) = chunk.get("id").and_then(|v| v.as_str())
+            && id.is_empty()
+        {
+            id = cid.to_string();
         }
         if let Some(u) = chunk.get("usage").filter(|u| !u.is_null()) {
             usage = u.clone();
@@ -246,10 +245,10 @@ fn assemble_sse_completion(text: &str, model: &str) -> Option<Value> {
         let Some(choice) = chunk.pointer("/choices/0") else {
             continue;
         };
-        if let Some(fr) = choice.get("finish_reason") {
-            if !fr.is_null() {
-                finish_reason = fr.clone();
-            }
+        if let Some(fr) = choice.get("finish_reason")
+            && !fr.is_null()
+        {
+            finish_reason = fr.clone();
         }
         if let Some(delta) = choice.get("delta") {
             if let Some(t) = delta.get("content").and_then(|c| c.as_str()) {
@@ -268,15 +267,15 @@ fn assemble_sse_completion(text: &str, model: &str) -> Option<Value> {
                         });
                     }
                     let slot = &mut tool_calls[idx];
-                    if let Some(tid) = tc.get("id").and_then(|v| v.as_str()) {
-                        if !tid.is_empty() {
-                            slot["id"] = json!(tid);
-                        }
+                    if let Some(tid) = tc.get("id").and_then(|v| v.as_str())
+                        && !tid.is_empty()
+                    {
+                        slot["id"] = json!(tid);
                     }
-                    if let Some(name) = tc.pointer("/function/name").and_then(|v| v.as_str()) {
-                        if !name.is_empty() {
-                            slot["function"]["name"] = json!(name);
-                        }
+                    if let Some(name) = tc.pointer("/function/name").and_then(|v| v.as_str())
+                        && !name.is_empty()
+                    {
+                        slot["function"]["name"] = json!(name);
                     }
                     if let Some(args) = tc.pointer("/function/arguments").and_then(|v| v.as_str()) {
                         let existing = slot["function"]["arguments"].as_str().unwrap_or("");

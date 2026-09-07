@@ -14,7 +14,7 @@
 )]
 
 use futures_util::StreamExt;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
@@ -147,7 +147,7 @@ fn resolve_learning_target() -> LearningTarget {
                     return LearningTarget::CommandCode {
                         url: format!("{}/alpha/generate", upstream_url()),
                         model: upstream_model(),
-                    }
+                    };
                 }
             };
         }
@@ -190,13 +190,12 @@ fn execute_taste_calls(pending: Vec<(String, String)>, text_out: &str) -> Result
         if let (Some(path), Some(content)) = (
             input.get("path").and_then(|p| p.as_str()),
             input.get("content").and_then(|c| c.as_str()),
-        ) {
-            if let Some(p) = resolve_taste_path(path) {
-                std::fs::create_dir_all(p.parent().unwrap_or(Path::new(".")))
-                    .map_err(|e| format!("mkdir failed: {e}"))?;
-                std::fs::write(&p, content).map_err(|e| format!("write failed: {e}"))?;
-                results.push(format!("Recorded preferences in {}", p.display()));
-            }
+        ) && let Some(p) = resolve_taste_path(path)
+        {
+            std::fs::create_dir_all(p.parent().unwrap_or(Path::new(".")))
+                .map_err(|e| format!("mkdir failed: {e}"))?;
+            std::fs::write(&p, content).map_err(|e| format!("write failed: {e}"))?;
+            results.push(format!("Recorded preferences in {}", p.display()));
         }
     }
 

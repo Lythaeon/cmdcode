@@ -97,10 +97,10 @@ impl RateLimiter {
         let window = Duration::from_secs(self.config.window_secs);
         let state = self.state.read().await;
 
-        if let Some(entry) = state.get(api_key) {
-            if now.duration_since(entry.window_start) <= window {
-                return self.config.max_requests.saturating_sub(entry.count);
-            }
+        if let Some(entry) = state.get(api_key)
+            && now.duration_since(entry.window_start) <= window
+        {
+            return self.config.max_requests.saturating_sub(entry.count);
         }
         self.config.max_requests
     }

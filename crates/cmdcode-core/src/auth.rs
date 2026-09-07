@@ -260,20 +260,19 @@ impl AuthManager {
     /// Load raw auth data and config, preferring the vault's active account
     /// when present and falling back to the legacy `auth.json`.
     async fn load_credentials(&self) -> Result<(AuthData, ConfigData), AuthError> {
-        if let Some(store) = &self.store {
-            if let Ok(vault) = store.load() {
-                if let Some(active) = vault.active_account() {
-                    let config = self.read_config().await;
-                    let auth = AuthData {
-                        api_key: Some(active.api_key.clone()),
-                        oauth_token: None,
-                        oauth_provider: None,
-                        user_id: Some(active.user_id.clone()),
-                        user_name: Some(active.user_name.clone()),
-                    };
-                    return Ok((auth, config));
-                }
-            }
+        if let Some(store) = &self.store
+            && let Ok(vault) = store.load()
+            && let Some(active) = vault.active_account()
+        {
+            let config = self.read_config().await;
+            let auth = AuthData {
+                api_key: Some(active.api_key.clone()),
+                oauth_token: None,
+                oauth_provider: None,
+                user_id: Some(active.user_id.clone()),
+                user_name: Some(active.user_name.clone()),
+            };
+            return Ok((auth, config));
         }
 
         // Fall back to the legacy `auth.json`.

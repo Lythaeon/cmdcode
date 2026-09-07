@@ -263,10 +263,10 @@ impl fmt::Display for Effort {
 /// Parse `model_id:effort` syntax.
 pub fn parse_model_and_effort(raw: &str) -> (ModelId, Option<Effort>) {
     let stripped = raw.strip_prefix("command-code/").unwrap_or(raw);
-    if let Some((model, effort_str)) = stripped.rsplit_once(':') {
-        if let Some(effort) = Effort::from_str_opt(effort_str) {
-            return (ModelId::new(model), Some(effort));
-        }
+    if let Some((model, effort_str)) = stripped.rsplit_once(':')
+        && let Some(effort) = Effort::from_str_opt(effort_str)
+    {
+        return (ModelId::new(model), Some(effort));
     }
     (ModelId::new(stripped), None)
 }

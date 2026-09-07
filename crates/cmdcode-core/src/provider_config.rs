@@ -232,7 +232,10 @@ mod tests {
 
     #[test]
     fn test_env_interpolation() {
-        std::env::set_var("PROVIDER_CFG_TEST_KEY", "sk-test-123");
+        // SAFETY: Tests run in isolation; env vars are test-scoped.
+        unsafe {
+            std::env::set_var("PROVIDER_CFG_TEST_KEY", "sk-test-123");
+        }
         assert_eq!(
             interpolate_env("{env:PROVIDER_CFG_TEST_KEY}"),
             "sk-test-123"
@@ -243,7 +246,10 @@ mod tests {
         );
         assert_eq!(interpolate_env("{env:PROVIDER_CFG_TEST_UNSET_VAR_XYZ}"), "");
         assert_eq!(interpolate_env("plain"), "plain");
-        std::env::remove_var("PROVIDER_CFG_TEST_KEY");
+        // SAFETY: Cleanup test env var.
+        unsafe {
+            std::env::remove_var("PROVIDER_CFG_TEST_KEY");
+        }
     }
 
     #[test]
@@ -260,13 +266,18 @@ mod tests {
 
     #[test]
     fn test_load_missing_returns_none() {
-        // Path override to something that does not exist.
-        std::env::set_var(
-            "CMDCODE_PROVIDERS_CONFIG",
-            "/tmp/nonexistent-providers-cfg.json",
-        );
+        // SAFETY: Tests run in isolation; env vars are test-scoped.
+        unsafe {
+            std::env::set_var(
+                "CMDCODE_PROVIDERS_CONFIG",
+                "/tmp/nonexistent-providers-cfg.json",
+            );
+        }
         let result = ProvidersConfig::load().unwrap();
         assert!(result.is_none());
-        std::env::remove_var("CMDCODE_PROVIDERS_CONFIG");
+        // SAFETY: Cleanup test env var.
+        unsafe {
+            std::env::remove_var("CMDCODE_PROVIDERS_CONFIG");
+        }
     }
 }

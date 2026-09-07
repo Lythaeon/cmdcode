@@ -1,8 +1,8 @@
 use cmdcode_core::accounts::AccountStore;
 use cmdcode_core::auth::AuthManager;
 use cmdcode_core::config::ProxyConfig;
-use cmdcode_server::logging::RotatingLog;
 use cmdcode_server::ProxyService;
+use cmdcode_server::logging::RotatingLog;
 
 pub fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config = ProxyConfig::from_env()?;

@@ -76,15 +76,15 @@ impl ChatCompletionRequest {
         let mut duplicate_assistant_indices = Vec::new();
 
         for (i, msg) in self.messages.iter().enumerate() {
-            if msg.role == "assistant" {
-                if let Some(ref tool_calls) = msg.tool_calls {
-                    for tc in tool_calls {
-                        if let Some(ref id) = tc.id {
-                            if !assistant_tool_call_ids.insert(id.clone()) {
-                                // This is a duplicate tool call in assistant messages
-                                duplicate_assistant_indices.push(i);
-                            }
-                        }
+            if msg.role == "assistant"
+                && let Some(ref tool_calls) = msg.tool_calls
+            {
+                for tc in tool_calls {
+                    if let Some(ref id) = tc.id
+                        && !assistant_tool_call_ids.insert(id.clone())
+                    {
+                        // This is a duplicate tool call in assistant messages
+                        duplicate_assistant_indices.push(i);
                     }
                 }
             }
@@ -92,10 +92,11 @@ impl ChatCompletionRequest {
 
         // Second pass: remove duplicate assistant messages (keep first occurrence)
         for i in duplicate_assistant_indices.into_iter().rev() {
-            if let Some(msg) = self.messages.get(i) {
-                if msg.role == "assistant" && msg.tool_calls.is_some() {
-                    self.messages.remove(i);
-                }
+            if let Some(msg) = self.messages.get(i)
+                && msg.role == "assistant"
+                && msg.tool_calls.is_some()
+            {
+                self.messages.remove(i);
             }
         }
 
@@ -104,12 +105,11 @@ impl ChatCompletionRequest {
         let mut duplicate_tool_result_indices = Vec::new();
 
         for (i, msg) in self.messages.iter().enumerate() {
-            if msg.role == "tool" {
-                if let Some(ref tool_call_id) = msg.tool_call_id {
-                    if !seen_tool_results.insert(tool_call_id.clone()) {
-                        duplicate_tool_result_indices.push(i);
-                    }
-                }
+            if msg.role == "tool"
+                && let Some(ref tool_call_id) = msg.tool_call_id
+                && !seen_tool_results.insert(tool_call_id.clone())
+            {
+                duplicate_tool_result_indices.push(i);
             }
         }
 
@@ -472,12 +472,11 @@ pub fn wire_messages(messages: &[OpenAiMessage]) -> Vec<CcMessage> {
                     if let Some(arr) = content.as_array() {
                         arr.iter()
                             .map(|part| {
-                                if let Some(obj) = part.as_object() {
-                                    if obj.get("type").and_then(|t| t.as_str())
+                                if let Some(obj) = part.as_object()
+                                    && obj.get("type").and_then(|t| t.as_str())
                                         == Some("tool_result")
-                                    {
-                                        return part.clone();
-                                    }
+                                {
+                                    return part.clone();
                                 }
                                 serde_json::json!({
                                     "type": "tool-result",
@@ -537,10 +536,10 @@ fn extract_text_content(content: &Option<serde_json::Value>) -> String {
         Some(serde_json::Value::Array(arr)) => arr
             .iter()
             .filter_map(|p| {
-                if let Some(obj) = p.as_object() {
-                    if obj.get("type").and_then(|t| t.as_str()) == Some("text") {
-                        return obj.get("text").and_then(|t| t.as_str()).map(String::from);
-                    }
+                if let Some(obj) = p.as_object()
+                    && obj.get("type").and_then(|t| t.as_str()) == Some("text")
+                {
+                    return obj.get("text").and_then(|t| t.as_str()).map(String::from);
                 }
                 p.as_str().map(String::from)
             })

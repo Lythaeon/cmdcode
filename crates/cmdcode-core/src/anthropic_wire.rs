@@ -9,7 +9,7 @@ use crate::wire_format::{
     OpenAiToolCall,
 };
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Content block in an Anthropic message. Only the shapes we transform are
 /// strongly typed; everything else round-trips as raw JSON.
@@ -485,10 +485,10 @@ impl AnthropicStreamRenderer {
         }
 
         // Usage may appear on any chunk; remember the latest.
-        if let Some(u) = chunk.get("usage") {
-            if let Some(n) = u.get("completion_tokens").and_then(|v| v.as_u64()) {
-                self.output_tokens_estimate = n;
-            }
+        if let Some(u) = chunk.get("usage")
+            && let Some(n) = u.get("completion_tokens").and_then(|v| v.as_u64())
+        {
+            self.output_tokens_estimate = n;
         }
 
         let choices = chunk.get("choices");

@@ -18,7 +18,7 @@ use crate::upstream::{LineOutcome, StreamState};
 use cmdcode_core::auth::AuthManager;
 use cmdcode_core::error::UpstreamError;
 use cmdcode_core::wire_format::{ChatCompletionRequest, OpenAiMessage};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// Anthropic requires an explicit cap; generous default when unset.
@@ -564,9 +564,11 @@ mod tests {
             LineOutcome::Emit(frame) => {
                 let parsed: Value =
                     serde_json::from_str(frame.trim_start_matches("data: ").trim()).unwrap();
-                assert!(parsed
-                    .pointer("/choices/0/delta/reasoning_content")
-                    .is_some());
+                assert!(
+                    parsed
+                        .pointer("/choices/0/delta/reasoning_content")
+                        .is_some()
+                );
             }
             _ => panic!("expected Emit"),
         }

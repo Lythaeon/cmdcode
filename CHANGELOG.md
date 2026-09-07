@@ -4,6 +4,47 @@ All notable changes to cmdcode are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-09-05
+
+The Responses API tool-call streaming release. Fixes broken tool-call
+streams on the `openai-responses` frontend so clients like OpenCode
+receive proper function call lifecycle events.
+
+### Added
+- **`response.output_item.added`** — emitted when a tool call starts,
+  includes `function_call` item with `name`, `call_id`, and
+  `status: "in_progress"`.
+- **`response.function_call_arguments.done`** — emitted when tool call
+  arguments are complete, with full accumulated JSON arguments.
+- **`response.output_item.done`** — emitted when a tool call finishes,
+  with complete `function_call` item including `arguments` and
+  `status: "completed"`.
+- **Tool call deduplication in Responses stream renderer** —
+  `seen_tool_calls` HashSet prevents duplicate `output_item.added`
+  events from breaking client streaming validators, matching the
+  pattern used in the Command Code upstream handler.
+- **Output index tracking** — `output_index` field on all tool call
+  events for proper Responses API sequencing.
+
+### Fixed
+- **Responses API streaming tool calls broken** — the stream renderer
+  emitted `response.function_call_arguments.delta` but never emitted
+  `output_item.added`, `function_call_arguments.done`, or
+  `output_item.done`, and the function name was never sent. Clients
+  received a stream that completed with no usable tool call.
+- **Incomplete stream detection** — streams that end without a finish
+  event now return a proper 502 error to the client instead of an
+  incomplete response.
+- **Formatting issues** in handler.rs and upstream.rs that caused CI
+  failures.
+
+### Changed
+- `ResponsesStreamRenderer` now tracks active tool call state
+  (`call_id`, `name`, `arguments_buffer`) to properly sequence lifecycle
+  events. Arguments are accumulated and flushed on `output_item.done`.
+
+**Compare**: https://github.com/Lythaeon/cmdcode/compare/v0.5.0...v0.6.0
+
 ## [0.5.0] - 2026-08-31
 
 The OpenCode compatibility release. Fixes duplicate tool call ID errors

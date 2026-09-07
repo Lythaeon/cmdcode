@@ -9,8 +9,8 @@
 use cmdcode_core::types::{Effort, FinishReason};
 use cmdcode_core::wire_format::UpstreamEvent;
 use cmdcode_core::wire_format::{
-    build_completion, wire_messages, CcUsage, FinishReason as WireFinishReason, OpenAiMessage,
-    OpenAiTool,
+    CcUsage, FinishReason as WireFinishReason, OpenAiMessage, OpenAiTool, build_completion,
+    wire_messages,
 };
 use proptest::prelude::*;
 

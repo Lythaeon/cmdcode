@@ -84,13 +84,15 @@ mod tests {
     #[test]
     fn test_config_from_env_defaults() {
         let _guard = ENV_LOCK.lock().unwrap();
-        // Ensure clean env
-        std::env::remove_var("COMMAND_CODE_PROXY_PORT");
-        std::env::remove_var("COMMAND_CODE_PROXY_HOST");
-        std::env::remove_var("COMMAND_CODE_PROXY_TIMEOUT");
-        std::env::remove_var("COMMAND_CODE_PROXY_MODELS");
-        std::env::remove_var("COMMAND_CODE_PROXY_INCOMING_TOKEN");
-        std::env::remove_var("COMMAND_CODE_PROXY_LOG_FILE");
+        // SAFETY: Tests run in isolation; env vars are test-scoped.
+        unsafe {
+            std::env::remove_var("COMMAND_CODE_PROXY_PORT");
+            std::env::remove_var("COMMAND_CODE_PROXY_HOST");
+            std::env::remove_var("COMMAND_CODE_PROXY_TIMEOUT");
+            std::env::remove_var("COMMAND_CODE_PROXY_MODELS");
+            std::env::remove_var("COMMAND_CODE_PROXY_INCOMING_TOKEN");
+            std::env::remove_var("COMMAND_CODE_PROXY_LOG_FILE");
+        }
 
         let config = ProxyConfig::from_env().unwrap();
         assert!(!config.listen_addr.is_empty());
@@ -102,64 +104,91 @@ mod tests {
     #[test]
     fn test_config_invalid_port() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("COMMAND_CODE_PROXY_PORT", "not-a-port");
+        // SAFETY: Tests run in isolation; env vars are test-scoped.
+        unsafe {
+            std::env::set_var("COMMAND_CODE_PROXY_PORT", "not-a-port");
+        }
         let result = ProxyConfig::from_env();
         assert!(result.is_err());
-        std::env::remove_var("COMMAND_CODE_PROXY_PORT");
+        unsafe {
+            std::env::remove_var("COMMAND_CODE_PROXY_PORT");
+        }
     }
 
     #[test]
     fn test_config_invalid_host() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("COMMAND_CODE_PROXY_HOST", "bad:host");
+        unsafe {
+            std::env::set_var("COMMAND_CODE_PROXY_HOST", "bad:host");
+        }
         let result = ProxyConfig::from_env();
         assert!(result.is_err());
-        std::env::remove_var("COMMAND_CODE_PROXY_HOST");
+        unsafe {
+            std::env::remove_var("COMMAND_CODE_PROXY_HOST");
+        }
     }
 
     #[test]
     fn test_config_whitespace_host() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("COMMAND_CODE_PROXY_HOST", "has space");
+        unsafe {
+            std::env::set_var("COMMAND_CODE_PROXY_HOST", "has space");
+        }
         let result = ProxyConfig::from_env();
         assert!(result.is_err());
-        std::env::remove_var("COMMAND_CODE_PROXY_HOST");
+        unsafe {
+            std::env::remove_var("COMMAND_CODE_PROXY_HOST");
+        }
     }
 
     #[test]
     fn test_config_invalid_timeout() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("COMMAND_CODE_PROXY_TIMEOUT", "not-a-number");
+        unsafe {
+            std::env::set_var("COMMAND_CODE_PROXY_TIMEOUT", "not-a-number");
+        }
         let result = ProxyConfig::from_env();
         assert!(result.is_err());
-        std::env::remove_var("COMMAND_CODE_PROXY_TIMEOUT");
+        unsafe {
+            std::env::remove_var("COMMAND_CODE_PROXY_TIMEOUT");
+        }
     }
 
     #[test]
     fn test_config_empty_models() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("COMMAND_CODE_PROXY_MODELS", "");
+        unsafe {
+            std::env::set_var("COMMAND_CODE_PROXY_MODELS", "");
+        }
         let config = ProxyConfig::from_env().unwrap();
         assert!(config.model_allowlist.is_none());
-        std::env::remove_var("COMMAND_CODE_PROXY_MODELS");
+        unsafe {
+            std::env::remove_var("COMMAND_CODE_PROXY_MODELS");
+        }
     }
 
     #[test]
     fn test_config_whitespace_models() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("COMMAND_CODE_PROXY_HOST");
-        std::env::set_var("COMMAND_CODE_PROXY_MODELS", "  ,  ,  ");
+        unsafe {
+            std::env::remove_var("COMMAND_CODE_PROXY_HOST");
+            std::env::set_var("COMMAND_CODE_PROXY_MODELS", "  ,  ,  ");
+        }
         let config = ProxyConfig::from_env().unwrap();
         assert!(
             config.model_allowlist.is_none() || config.model_allowlist.as_ref().unwrap().is_empty()
         );
-        std::env::remove_var("COMMAND_CODE_PROXY_MODELS");
+        unsafe {
+            std::env::remove_var("COMMAND_CODE_PROXY_MODELS");
+        }
     }
 
     #[test]
     fn test_config_tls_both_required() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("COMMAND_CODE_PROXY_HOST");
+        unsafe {
+            std::env::remove_var("COMMAND_CODE_PROXY_HOST");
+        }
         let config = ProxyConfig::from_env().unwrap();
         let _ = config.tls_cert;
         let _ = config.tls_key;
@@ -168,18 +197,28 @@ mod tests {
     #[test]
     fn test_config_empty_incoming_token() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("COMMAND_CODE_PROXY_INCOMING_TOKEN", "  ");
+        unsafe {
+            std::env::set_var("COMMAND_CODE_PROXY_INCOMING_TOKEN", "  ");
+        }
         let config = ProxyConfig::from_env().unwrap();
         assert!(config.incoming_token.is_none());
-        std::env::remove_var("COMMAND_CODE_PROXY_INCOMING_TOKEN");
+        unsafe {
+            std::env::remove_var("COMMAND_CODE_PROXY_INCOMING_TOKEN");
+        }
     }
 
     #[test]
     fn test_config_empty_log_file() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("COMMAND_CODE_PROXY_LOG_FILE", "  ");
+        // SAFETY: Tests run in isolation; env vars are test-scoped.
+        unsafe {
+            std::env::set_var("COMMAND_CODE_PROXY_LOG_FILE", "  ");
+        }
         let config = ProxyConfig::from_env().unwrap();
         assert!(config.log_file.is_none());
-        std::env::remove_var("COMMAND_CODE_PROXY_LOG_FILE");
+        // SAFETY: Cleanup test env var.
+        unsafe {
+            std::env::remove_var("COMMAND_CODE_PROXY_LOG_FILE");
+        }
     }
 }

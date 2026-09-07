@@ -5,7 +5,7 @@ use cmdcode_core::types::{Effort, ModelId};
 use cmdcode_core::wire_format::{ChatCompletionRequest, UpstreamEvent};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{Semaphore, mpsc};
 
 use crate::metrics::Metrics;
 
@@ -151,41 +151,37 @@ impl UpstreamClient {
                     let status = response.status().as_u16();
                     if status != 200 {
                         let body_text = response.text().await.unwrap_or_default();
-                        if body_text.starts_with('{') {
-                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body_text) {
-                                if let Some(err) = val.get("error") {
-                                    let upstream_err = UpstreamError::HttpError {
-                                        status,
-                                        body: err.to_string(),
-                                    };
-                                    if provider.should_rotate(status, &body_text) && !auth_retried {
-                                        if let Some(name) =
-                                            provider.on_auth_rejected(&self.auth).await
-                                        {
-                                            tracing::warn!(
-                                                account = %name,
-                                                status = status,
-                                                "credential rejected; rotated to account"
-                                            );
-                                        } else {
-                                            self.auth.invalidate_cache().await;
-                                        }
-                                        headers = provider.headers(&self.auth, &cwd).await?;
-                                        auth_retried = true;
-                                        continue; // refresh once, not against the retry budget
-                                    }
-                                    if is_retryable(status) && attempt + 1 < max_attempts {
-                                        last_err = Some(upstream_err);
-                                        let backoff =
-                                            Duration::from_millis(100 * 2u64.pow(attempt));
-                                        tokio::time::sleep(backoff).await;
-                                        self.metrics.inc_retries();
-                                        attempt += 1;
-                                        continue;
-                                    }
-                                    return Err(upstream_err);
+                        if body_text.starts_with('{')
+                            && let Ok(val) = serde_json::from_str::<serde_json::Value>(&body_text)
+                            && let Some(err) = val.get("error")
+                        {
+                            let upstream_err = UpstreamError::HttpError {
+                                status,
+                                body: err.to_string(),
+                            };
+                            if provider.should_rotate(status, &body_text) && !auth_retried {
+                                if let Some(name) = provider.on_auth_rejected(&self.auth).await {
+                                    tracing::warn!(
+                                        account = %name,
+                                        status = status,
+                                        "credential rejected; rotated to account"
+                                    );
+                                } else {
+                                    self.auth.invalidate_cache().await;
                                 }
+                                headers = provider.headers(&self.auth, &cwd).await?;
+                                auth_retried = true;
+                                continue; // refresh once, not against the retry budget
                             }
+                            if is_retryable(status) && attempt + 1 < max_attempts {
+                                last_err = Some(upstream_err);
+                                let backoff = Duration::from_millis(100 * 2u64.pow(attempt));
+                                tokio::time::sleep(backoff).await;
+                                self.metrics.inc_retries();
+                                attempt += 1;
+                                continue;
+                            }
+                            return Err(upstream_err);
                         }
                         if provider.should_rotate(status, &body_text) && !auth_retried {
                             if let Some(name) = provider.on_auth_rejected(&self.auth).await {
@@ -502,10 +498,11 @@ fn cached_structure(cwd: &str) -> Arc<Vec<String>> {
         Err(p) => p.into_inner(),
     };
 
-    if let Some((cached_cwd, cached_at, cached)) = guard.as_ref() {
-        if cached_cwd == cwd && cached_at.elapsed().as_secs() < STRUCTURE_CACHE_TTL_SECS {
-            return cached.clone();
-        }
+    if let Some((cached_cwd, cached_at, cached)) = guard.as_ref()
+        && cached_cwd == cwd
+        && cached_at.elapsed().as_secs() < STRUCTURE_CACHE_TTL_SECS
+    {
+        return cached.clone();
     }
 
     let structure: Vec<String> = std::fs::read_dir(cwd)
@@ -788,12 +785,11 @@ pub fn translate_line(line: &str, state: &mut StreamState) -> LineOutcome {
             return LineOutcome::Skip;
         }
         "tool-input-delta" => {
-            if let Some(id) = &evt.id {
-                if let Some((_, _, args)) = state.tool_parts.get_mut(id) {
-                    if let Some(d) = &evt.delta {
-                        args.push_str(d);
-                    }
-                }
+            if let Some(id) = &evt.id
+                && let Some((_, _, args)) = state.tool_parts.get_mut(id)
+                && let Some(d) = &evt.delta
+            {
+                args.push_str(d);
             }
             return LineOutcome::Skip;
         }
@@ -956,10 +952,10 @@ pub fn extract_system(messages: &[cmdcode_core::wire_format::OpenAiMessage]) -> 
                 Some(serde_json::Value::Array(arr)) => arr
                     .iter()
                     .filter_map(|p| {
-                        if let Some(obj) = p.as_object() {
-                            if obj.get("type").and_then(|t| t.as_str()) == Some("text") {
-                                return obj.get("text").and_then(|t| t.as_str()).map(String::from);
-                            }
+                        if let Some(obj) = p.as_object()
+                            && obj.get("type").and_then(|t| t.as_str()) == Some("text")
+                        {
+                            return obj.get("text").and_then(|t| t.as_str()).map(String::from);
                         }
                         p.as_str().map(String::from)
                     })
@@ -1009,27 +1005,24 @@ pub async fn read_taste_content(auth_dir: &std::path::Path, cwd: &str) -> String
     static CACHE: std::sync::LazyLock<std::sync::Mutex<TasteCache>> =
         std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
-    if mtime_key != 0 {
-        if let Ok(guard) = CACHE.lock() {
-            if let Some((cached_key, cached_val)) =
-                guard.get(&(global_path.clone(), local_path.clone()))
-            {
-                if *cached_key == mtime_key {
-                    return cached_val.clone();
-                }
-            }
-        }
+    if mtime_key != 0
+        && let Ok(guard) = CACHE.lock()
+        && let Some((cached_key, cached_val)) =
+            guard.get(&(global_path.clone(), local_path.clone()))
+        && *cached_key == mtime_key
+    {
+        return cached_val.clone();
     }
 
     let mut parts = Vec::new();
     for path in [&global_path, &local_path] {
-        if path.exists() {
-            if let Ok(content) = tokio::fs::read_to_string(path).await {
-                let trimmed = content.trim();
-                // Skip header-only files (just markdown headers, no real content).
-                if !is_header_only(trimmed) {
-                    parts.push(trimmed.to_string());
-                }
+        if path.exists()
+            && let Ok(content) = tokio::fs::read_to_string(path).await
+        {
+            let trimmed = content.trim();
+            // Skip header-only files (just markdown headers, no real content).
+            if !is_header_only(trimmed) {
+                parts.push(trimmed.to_string());
             }
         }
     }
@@ -1055,10 +1048,10 @@ pub async fn read_taste_content(auth_dir: &std::path::Path, cwd: &str) -> String
         )
     };
 
-    if mtime_key != 0 {
-        if let Ok(mut guard) = CACHE.lock() {
-            guard.insert((global_path, local_path), (mtime_key, rendered.clone()));
-        }
+    if mtime_key != 0
+        && let Ok(mut guard) = CACHE.lock()
+    {
+        guard.insert((global_path, local_path), (mtime_key, rendered.clone()));
     }
     rendered
 }

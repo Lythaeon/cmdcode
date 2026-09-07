@@ -10,7 +10,7 @@ use crate::wire_format::{
     OpenAiToolCall,
 };
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashSet;
 
 /// One input item of the Responses API.
@@ -795,8 +795,10 @@ mod tests {
             }]
         });
         let frames = r.feed(&format!("data: {c3}"));
-        assert!(frames
-            .join("")
-            .contains("response.function_call_arguments.delta"));
+        assert!(
+            frames
+                .join("")
+                .contains("response.function_call_arguments.delta")
+        );
     }
 }

@@ -4,8 +4,8 @@
 //! OpenAI-compat layer (which our openai adapter already covers).
 
 use crate::wire_format::{ChatCompletionRequest, FinishReason, OpenAiMessage};
-use serde::{de::DeserializeOwned, Deserialize};
-use serde_json::{json, Value};
+use serde::{Deserialize, de::DeserializeOwned};
+use serde_json::{Value, json};
 
 /// Incoming `/api/chat` request.
 #[derive(Debug, Clone, Deserialize)]

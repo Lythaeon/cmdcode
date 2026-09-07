@@ -18,7 +18,7 @@ use crate::upstream::{LineOutcome, StreamState};
 use cmdcode_core::auth::AuthManager;
 use cmdcode_core::error::UpstreamError;
 use cmdcode_core::wire_format::OpenAiMessage;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub(crate) const DEFAULT_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -340,10 +340,10 @@ pub fn gemini_translate_line<'a>(line: &str, state: &mut StreamState<'a>) -> Lin
     let mut deltas: Vec<Value> = Vec::new();
     if let Some(parts) = parts {
         for part in parts {
-            if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
-                if !t.is_empty() {
-                    deltas.push(json!({"content": t}));
-                }
+            if let Some(t) = part.get("text").and_then(|t| t.as_str())
+                && !t.is_empty()
+            {
+                deltas.push(json!({"content": t}));
             }
             if let Some(call) = part.get("functionCall") {
                 let name = call.get("name").and_then(|n| n.as_str()).unwrap_or("");
